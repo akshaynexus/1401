@@ -66,15 +66,63 @@ def _opencore_from_builds(fetch=None):
     raise ValidatorUnavailable("engine download history names no OpenCorePkg, and no cached OpenCore matches Dortania's list")
 
 
-def _opencore_release():
+def _history_opencore(cache_dir):
+    """(url, sha256) of the OpenCorePkg in an engine download history, or None."""
     try:
-        with open(os.path.join(_engine_cache(), "history.json")) as fh:
+        with open(os.path.join(cache_dir, "history.json")) as fh:
             for x in json.load(fh):
                 if x["product_name"] == "OpenCorePkg":
                     return x["url"], x["sha256"]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return _opencore_from_builds()
+    return None
+
+
+def _caller_engine_cache(env=None):
+    """The engine cache of the person linux/1401-helper runs a step for, or None.
+
+    The helper runs the stick writer as root with HOME=/root, so the engine cache it would look in
+    (/root/.local/share/NullMoth/1401/OCK_Files) is not the one the build used: the window built the EFI as the
+    user, in that user's ~/.local/share/NullMoth/1401/OCK_Files. Without this, the writer's check before erasing
+    stopped with "engine download history names no OpenCorePkg" on every Linux write."""
+    env = os.environ if env is None else env
+    uid = env.get("A1401_CALLER_UID", "")
+    if not uid.isdigit() or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return None
+    try:
+        import pwd  # noqa: PLC0415
+        home = pwd.getpwuid(int(uid)).pw_dir
+    except (KeyError, ImportError):
+        return None
+    from . import linuxhost  # noqa: PLC0415
+    return os.path.join(linuxhost.work_dir({"HOME": home}), "OCK_Files")
+
+
+def _in_dortania_list(url, sha, fetch=None):
+    """True when Dortania's build list (the list the engine downloads OpenCore from) publishes this url with this
+    sha256. A history file in the user's folder is not trusted on its own by a step running as root."""
+    if fetch is None:
+        def fetch(u):
+            with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "1401"}), timeout=60) as r:
+                return json.loads(r.read())
+    for v in (fetch(DORTANIA_BUILDS).get("OpenCorePkg") or {}).get("versions", []):
+        for kind in ("debug", "release"):
+            if (v.get("links") or {}).get(kind) == url and \
+                    ((v.get("hashes") or {}).get(kind) or {}).get("sha256") == sha:
+                return True
+    return False
+
+
+def _opencore_release(env=None, fetch=None):
+    found = _history_opencore(_engine_cache())
+    if found:
+        return found
+    caller = _caller_engine_cache(env)
+    if caller:
+        found = _history_opencore(caller)
+        if found and _in_dortania_list(*found, fetch=fetch):
+            return found
+    return _opencore_from_builds(fetch)
 
 
 def ocvalidate_path():
