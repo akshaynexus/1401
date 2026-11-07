@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- 1401: the two steps that need root on Linux, reading the ACPI tables (Check this PC) and erasing and writing the
+     USB stick (Create the macOS stick). Both run linux/1401-helper, which refuses any other command.
+     install.sh rewrites exec.path to where the helper is installed; the path below is the /usr/local install. -->
+<policyconfig>
+  <vendor>NullMoth Systems</vendor>
+  <vendor_url>https://github.com/nullmoth/1401</vendor_url>
+  <icon_name>com.nullmoth.A1401</icon_name>
+  <action id="com.nullmoth.A1401.helper">
+    <description>Read this PC's ACPI tables or write the macOS install stick</description>
+    <description xml:lang="zh_CN">读取本机 ACPI 表或写入 macOS 安装盘</description>
+    <message>1401 needs administrator rights to read this PC's ACPI tables, or to erase and write the USB stick you picked.</message>
+    <message xml:lang="zh_CN">1401 需要管理员权限来读取本机的 ACPI 表，或擦除并写入你选择的 U 盘。</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/lib/1401/linux/1401-helper</annotate>
+  </action>
+</policyconfig>

@@ -277,7 +277,15 @@ def build_guide(report, config, bitlocker=None, macos="", disabled_devices=None)
     ])
     steps.append(before)
 
-    if bitlocker != "Off":
+    linux = sys.platform.startswith("linux")   # the steps name the running system's own way to restart
+    if bitlocker != "Off" and linux:
+        # Linux cannot see or pause another system's BitLocker; the step stays for a PC that also has Windows.
+        steps.append(Step(loc.t("BitLocker (Windows drive encryption)"), [
+            loc.t("If this PC also has Windows with BitLocker on: save its recovery key first (aka.ms/myrecoverykey), and in "
+                  "Windows suspend BitLocker before you change the BIOS. Changing Secure Boot with BitLocker running makes "
+                  "Windows ask for that key. Without Windows on this PC, skip this step."),
+        ], blocker=True))
+    elif bitlocker != "Off":
         steps.append(Step(loc.t("BitLocker (Windows drive encryption)"), [
             (loc.t("BitLocker is ON on this PC. ") if bitlocker == "On" else
              loc.t("The app couldn't tell whether BitLocker is on. If it is: ")) +
@@ -314,7 +322,9 @@ def build_guide(report, config, bitlocker=None, macos="", disabled_devices=None)
     # They can't see this page while they're in the BIOS, so have them photograph it first.
     open_bios = [loc.t("Before you restart, take a photo of this page with your phone. You can't see it while you're in "
                  "the BIOS.")]
-    open_bios.append(loc.t("Click **Restart into BIOS setup** in the app. Windows restarts straight into your BIOS setup.")
+    open_bios.append((loc.t("Restart straight into your BIOS setup: in a terminal, run `systemctl reboot --firmware-setup`.")
+                      if linux else
+                      loc.t("Click **Restart into BIOS setup** in the app. Windows restarts straight into your BIOS setup."))
                      if bios.get("Firmware Type", "UEFI") == "UEFI" else
                      loc.t("Restart and press the setup key as soon as the PC powers on."))
     open_bios.append(loc.f("If that doesn't work: restart and press [[{}]] repeatedly right after power-on.", k[0]) if k else
@@ -322,12 +332,16 @@ def build_guide(report, config, bitlocker=None, macos="", disabled_devices=None)
                      "your manual names it)."))
     open_bios.append(loc.t("These settings follow the scanned hardware and generated EFI. Menu names and vendor-family boot keys "
                      "are suggestions; check the manual for the exact model and board revision. No firmware changes are automated."))
-    open_bios.append(loc.t("Change the settings below, then Save & Exit (on most boards [[F10]]). Let Windows start once "
+    open_bios.append(loc.t("Change the settings below, then Save & Exit (on most boards [[F10]]). Let Linux start once "
+                     "to check it still boots.") if linux else
+                     loc.t("Change the settings below, then Save & Exit (on most boards [[F10]]). Let Windows start once "
                      "to check it still boots."))
     steps.append(Step(loc.t("Change these BIOS settings, then Save & Exit"), open_bios,
                       settings=bios_settings(report, config, disabled_devices)))
 
     steps.append(Step(loc.t("Start from the stick"), [
+        loc.t("Leave the stick plugged in. If the BIOS already lists it as a boot entry, `sudo efibootmgr --bootnext <number>` "
+              "and a restart start it once (`efibootmgr` alone lists the numbers).") if linux else
         loc.t("Leave the stick plugged in. Click **Restart now and pick the USB stick (Use a device)** in the app. Windows "
              "restarts into its blue startup menu: choose Use a device, then your USB stick."),
         loc.f("Or restart and press [[{}]] repeatedly as the PC starts, to open its boot menu, then pick the USB stick "

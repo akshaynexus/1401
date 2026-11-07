@@ -121,6 +121,12 @@ def json_key(c):
 def cpu_topology(kernel32=None):
     source = "kernel32!GetLogicalProcessorInformationEx(RelationAll)"
     if kernel32 is None:
+        if sys.platform.startswith("linux"):
+            linux_source = "sysfs /sys/devices/system/cpu/cpu*/topology"
+            try:
+                return measured(_owned_module("linuxhost").cpu_topology(), linux_source)
+            except Exception as e:  # noqa: BLE001 - the reason rides in the record
+                return unavailable(f"{type(e).__name__}: {e}", linux_source)
         if sys.platform != "win32":
             return unavailable("not Windows", source)
         kernel32 = _kernel32()

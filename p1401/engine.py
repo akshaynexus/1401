@@ -127,7 +127,10 @@ class EngineExit(RuntimeError):
 
 
 def boot_epoch():
-    """When Windows last started (seconds since the epoch), or None where that is not known."""
+    """When Windows (or Linux) last started (seconds since the epoch), or None where that is not known."""
+    if sys.platform.startswith("linux"):
+        from . import linuxhost  # noqa: PLC0415
+        return linuxhost.boot_epoch()
     if sys.platform != "win32":
         return None
     try:
@@ -147,6 +150,11 @@ STALE_SCAN_SLACK = 60
 
 def stale_scan_message(report_path, booted=None):
     """A message when the hardware report predates this Windows session, else None. booted is an injectable epoch."""
+    if booted is None and sys.platform.startswith("linux") and \
+            not os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(report_path)), "scan-evidence.json")):
+        # Only a report this machine's own scan wrote (p1401.scan leaves its receipt beside it) describes this boot's
+        # firmware; a report copied in from elsewhere (the corpus, a user's upload) has no restart to be older than.
+        return None
     booted = boot_epoch() if booted is None else booted
     if booted is None:
         return None
@@ -157,7 +165,8 @@ def stale_scan_message(report_path, booted=None):
     if written >= booted - STALE_SCAN_SLACK:
         return None
     fmt = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))  # noqa: E731
-    return (f"This PC was checked before its last restart (report written {fmt(written)}, Windows started "
+    system = "Linux" if sys.platform.startswith("linux") else "Windows"
+    return (f"This PC was checked before its last restart (report written {fmt(written)}, {system} started "
             f"{fmt(booted)}). Firmware settings may have changed since, so that report cannot be built from. "
             "Run Check this PC again, then Build.")
 
@@ -382,6 +391,8 @@ def _load_engine():
     spec.loader.exec_module(mod)
     _patient_downloads()
     _dsdt_signature_fix()
+    if sys.platform.startswith("linux"):
+        _linux_iasl()
     _modern_nvidia_stays_ours()
     from . import tls  # noqa: PLC0415
     tls.install()   # verify against the Windows store + certifi, not certifi alone
@@ -462,11 +473,44 @@ def _dsdt_signature_fix():
     cls._1401_sig = True
 
 
+def _linux_iasl():
+    """Linux: iasl from the engine folder when one is there (as Windows ships Scripts/iasl.exe), else the system's own
+    (the distribution's acpica / acpica-tools package), and only when neither exists the engine's download - which is
+    unverified and needs the engine folder to be writable. Windows keeps the engine's lookup unchanged."""
+    import shutil as sh  # noqa: PLC0415
+    from Scripts import dsdt  # noqa: PLC0415 - upstream module
+    cls = dsdt.DSDT
+    if getattr(cls, "_1401_iasl", False):
+        return
+    orig = cls.check_iasl
+
+    def usable(path):
+        return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+    def check_iasl(self, legacy=False, try_downloading=True):
+        chosen = None if legacy else os.environ.get("A1401_IASL")   # a packager's or tester's explicit choice
+        if usable(chosen):
+            return os.path.abspath(chosen)
+        found = orig(self, legacy=legacy, try_downloading=False)
+        if found:
+            return found
+        system = None if legacy else sh.which("iasl")
+        if usable(system):
+            return os.path.abspath(system)
+        print("iasl was not found in the engine folder or on PATH; downloading the engine's copy "
+              "(install your distribution's acpica / acpica-tools package to use that instead).")
+        return orig(self, legacy=legacy, try_downloading=try_downloading)
+    cls.check_iasl = check_iasl
+    cls._1401_iasl = True
+
+
 def network_help(url):
     host = urllib.parse.urlsplit(url).hostname or url
+    proxy = ("a proxy (1401 uses the https_proxy environment variable)" if sys.platform.startswith("linux") else
+             "a proxy set in Windows (Settings > Network & internet > Proxy - 1401 uses it)")
     return (f"1401 could not reach {host} (tried several times). The build downloads OpenCore and its drivers from GitHub, "
             "and this network blocks or resets those connections - common in mainland China and on some school or work "
-            "networks. Turn on a VPN, or a proxy set in Windows (Settings > Network & internet > Proxy - 1401 uses it), "
+            f"networks. Turn on a VPN, or {proxy}, "
             "then build again.")
 
 
@@ -474,8 +518,18 @@ def network_help(url):
 # efi\manifest.json): the engine keeps its downloads in OCK_Files beside its own code, so it rewrote files inside the
 # folder the user unpacked - which can be read-only or watched by antivirus - and 1.0.0-1.0.6 even shipped a stale copy of
 # that cache. On Windows it now lives in the user's writable app-data folder; the zip ships none.
-OCK_CACHE = (os.path.join(os.environ["LOCALAPPDATA"], "NullMoth", "1401", "OCK_Files") if os.environ.get("LOCALAPPDATA")
-             else os.path.join(REPO, "upstream", "OpCore-Simplify", "OCK_Files"))
+# On Linux the same user folder is $XDG_DATA_HOME/NullMoth/1401 (linuxhost.work_dir), so an engine installed read-only
+# (a system package) still has somewhere to keep them.
+def _ock_cache():
+    if os.environ.get("LOCALAPPDATA"):
+        return os.path.join(os.environ["LOCALAPPDATA"], "NullMoth", "1401", "OCK_Files")
+    if sys.platform.startswith("linux"):
+        from . import linuxhost  # noqa: PLC0415
+        return os.path.join(linuxhost.work_dir(), "OCK_Files")
+    return os.path.join(REPO, "upstream", "OpCore-Simplify", "OCK_Files")
+
+
+OCK_CACHE = _ock_cache()
 
 
 def _use_ock_cache(o):
@@ -774,6 +828,10 @@ def _nullmoth_gpu_pass(checker, h):
         except EngineExit as e:
             exited = e
         hit = nullmoth.mark(checker.hardware_report)
+        if hit and nullmoth.SOURCE_ERROR:  # a fork config that is there but wrong: stop now, not at stick-write time
+            raise EngineExit(f"The NVIDIA driver source config is wrong, so this build stopped: {nullmoth.SOURCE_ERROR}")
+        if hit and nullmoth.SOURCE is not None and not nullmoth.SOURCE.builtin:
+            h.notices.append(f"NullMoth driver source: {nullmoth.source_info()['label']}")
         # Per-AMD-GPU notice (family -> the macOS path it gets), independent of the NVIDIA path above. It names the
         # card so the user sees before building whether this AMD GPU gets full acceleration, basic display with an
         # opt-in/experimental route, or no driver at all.

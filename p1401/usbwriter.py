@@ -10,6 +10,10 @@ Layout follows Dortania's Windows guide (diskpart clean / convert gpt / create p
 The partition is capped at 16 GiB since Windows won't format FAT32 over 32 GiB. EFI + recovery need about 1 GiB.
 
 NOT TESTED ON WINDOWS YET. So far the script and its checks have only been tested on macOS against fake disks.
+
+On Linux (`python -m p1401.usbwriter list` / `write ...`, run as root through pkexec for write) the same CLI lists
+disks through lsblk and erases with wipefs, sfdisk and mkfs.fat into rawdisk.py's layout: see p1401/linuxdisk.py.
+The Linux side is switched on by the __main__ block only, so importing this module keeps the Windows behaviour.
 """
 import json
 import os
@@ -48,6 +52,11 @@ RAW_REFUSED = (5, 1117)
 
 class UsbError(RuntimeError):
     pass
+
+
+# Set by the __main__ block when the writer runs on Linux: list_disks(), eligible(), write() and cli_write() then use
+# p1401/linuxdisk.py. Never set on import, so every caller (and test) that imports this module sees Windows' writer.
+_LINUX = False
 
 
 def _system_tool(*parts):
@@ -233,6 +242,12 @@ def list_disks(_repaired=False):
     write logs, two PCs: "Windows lists 0 disk(s)" right after the window had listed the stick through WMI, so every
     write stopped as DISK-RENUMBERED), the same MSFT_Disk class the window reads, with its numeric bus and partition
     codes named the way Get-Disk names them."""
+    if _LINUX:
+        from . import linuxdisk  # noqa: PLC0415
+        try:
+            return linuxdisk.list_disks()
+        except linuxdisk.DiskError as e:
+            raise UsbError(str(e)) from e
     disks = _as_list(_ps(f"Get-Disk | Select-Object {FIELDS} | ConvertTo-Json -Compress"))
     if disks:
         return disks
@@ -282,6 +297,8 @@ def _log_powershell_context():
 
 def eligible(disk, allow_large=False):
     """Returns (ok, reasons): every reason this disk can't be erased, worded for the user."""
+    if disk.get("Via") == "linux":
+        return _eligible_linux(disk, allow_large)
     why = []
     if disk.get("BusType") != "USB":
         why.append(f"not a USB disk (bus: {disk.get('BusType')})")
@@ -305,6 +322,29 @@ def eligible(disk, allow_large=False):
                    "switch on its side, slide it the other way and press Write again. Sticks with no switch report "
                    "this when their controller has turned read-only because the memory is worn out, and that cannot "
                    "be undone - use a different USB stick")
+    size = int(disk.get("Size") or 0)
+    if size < MIN_DISK:
+        why.append(f"too small ({size / GiB:.1f} GiB; the installer needs 2)")
+    if size > MAX_DISK and not allow_large:
+        why.append(f"{size / GiB:.0f} GiB is larger than any USB stick 1401 expects - confirm it is not a backup drive")
+    return not why, why
+
+
+def _eligible_linux(disk, allow_large=False):
+    """eligible() for a disk listed by linuxdisk: the same rules, worded for Linux (no Disk Management, no offline)."""
+    why = []
+    if disk.get("BusType") != "USB":
+        why.append(f"not a USB disk (bus: {disk.get('BusType')})")
+    mounts = ", ".join(disk.get("SystemMounts") or [])
+    if disk.get("IsBoot"):
+        why.append("this is the disk the computer booted from" + (f" (it holds {mounts})" if mounts else ""))
+    if disk.get("IsSystem"):
+        why.append("this disk holds the running system" + (f" ({mounts})" if mounts else ""))
+    if disk.get("IsReadOnly"):
+        why.append("Linux cannot write to this stick (it is read-only). If the stick has a small lock switch on its "
+                   "side, slide it the other way, plug it in again and press Write again. Sticks with no switch report "
+                   "this when their controller has turned read-only because the memory is worn out - use a different "
+                   "USB stick")
     size = int(disk.get("Size") or 0)
     if size < MIN_DISK:
         why.append(f"too small ({size / GiB:.1f} GiB; the installer needs 2)")
@@ -560,6 +600,8 @@ def write(disk, efi_build_dir, recovery_info, allow_large=False, progress=None, 
         from . import machine_handoff
         if machine_handoff.verified(efi_build_dir) != machine_profile:
             raise UsbError('The machine profile changed before erasing the stick. Rebuild the EFI.')
+    if disk.get("Via") == "linux":
+        return _write_linux(disk, efi_build_dir, recovery_info, progress, machine_profile, erase_os, opt_in)
     if disk.get("Via") == "Win32_DiskDrive":
         root = _write_wmi_erase(disk, erase_os)
         return _write_payload(root, efi_build_dir, recovery_info, progress, machine_profile, stick_name(disk), opt_in)
@@ -695,6 +737,58 @@ Write-Output "LETTER=$letter"
     return _write_payload(root, efi_build_dir, recovery_info, progress, machine_profile, stick_name(disk), opt_in)
 
 
+def _write_linux(disk, efi_build_dir, recovery_info, progress, machine_profile, erase_os, opt_in):
+    """The Linux erase (linuxdisk.py): check the stick again, unmount it, wipefs + sfdisk + mkfs.fat, mount it on a
+    private folder, then the same payload as on Windows. The stick stays mounted for cli_write's --extra files; the
+    result's "linux_mount" is unmounted by finish_linux(). Any failure after the mount unmounts it before raising."""
+    from . import linuxdisk  # noqa: PLC0415
+    say = lambda m: print(m, flush=True)  # noqa: E731
+    try:
+        linuxdisk.check(disk, erase_os)
+        part = linuxdisk.erase_mbr_fat32(disk, PART_CAP, say=say)
+        where = linuxdisk.mount(part)
+    except linuxdisk.DiskError as e:
+        raise UsbError(str(e)) from e
+    say(f"OK mounted the new FAT32 partition {part} at {where}")
+    try:
+        res = _write_payload(where, efi_build_dir, recovery_info, progress, machine_profile, stick_name(disk), opt_in)
+    except BaseException:
+        try:
+            linuxdisk.unmount(where, say=say, part=part)
+        except linuxdisk.DiskError as e:
+            say(f"WARN {e}")
+        raise
+    return {**res, "linux_mount": where, "device": disk.get("Path"), "partition": part}
+
+
+def finish_linux(res):
+    """Syncs and unmounts the stick write() left mounted on Linux. Returns the device path to name to the user."""
+    from . import linuxdisk  # noqa: PLC0415
+    where = (res or {}).get("linux_mount")
+    if where:
+        try:
+            linuxdisk.unmount(where, say=lambda m: print(m, flush=True), part=res.get("partition"))
+        except linuxdisk.DiskError as e:
+            raise UsbError(str(e)) from e
+    return (res or {}).get("device") or (res or {}).get("root")
+
+
+def _linux_preconditions():
+    """The STOP line when this Linux writer cannot erase anything: not root, or a program missing. None when ready."""
+    from . import linuxdisk  # noqa: PLC0415
+    if not linuxdisk.is_root():
+        # pkexec clears the environment and starts in root's home: the package folder goes in as PYTHONPATH
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return ("STOP 1401-NEEDS-ROOT: erasing a USB stick needs administrator rights on Linux. Start the writer through "
+                f"pkexec (pkexec env PYTHONPATH={here} {sys.executable} -m p1401.usbwriter write ..., with absolute "
+                "paths) or let the 1401 app ask for your password. Nothing was erased.")
+    missing = linuxdisk.missing_tools()
+    if missing:
+        return ("STOP 1401-MISSING-TOOLS: 1401 needs these programs to prepare the stick: "
+                + ", ".join(f"{name} (install the package {pkg})" for name, pkg in missing) + ". Nothing was erased.")
+    return None
+
+
 def _write_wmi_erase(disk, erase_os):
     """The erase when this PC has no working storage cmdlets: every Get-Disk / Get-Partition / Format-Volume step of the
     usual path would fail, so the stick is checked through classic WMI and erased by diskpart alone (clean, MBR, FAT32,
@@ -773,7 +867,10 @@ def _write_payload(root, efi_build_dir, recovery_info, progress, machine_profile
         driver = nullmoth.stage(root, cache, fetch=_fetch)
     if machine_profile is not None:
         machine_handoff.copy_to_installer(machine_profile, root, opt_in)
-    return {"root": root, "nullmoth": driver, **got}
+    out = {"root": root, "nullmoth": driver, **got}
+    if driver:
+        out["driver_source"] = nullmoth.source_info()
+    return out
 
 
 def verify_efi_copy(source, destination, copy=None):
@@ -830,7 +927,9 @@ def _pinned_package(path):
     version, and the app took the first by name: a 1.8 app passed nullmoth-nvidia-1.7.0.tar.gz (10-10), so the stick
     went to the network for 1.8.0, and "1.10.0" sorts before "1.9.0". The pinned name wins when it is there."""
     from . import nullmoth  # noqa: PLC0415
-    pinned = os.path.join(os.path.dirname(path), nullmoth.PACKAGE["name"])
+    src = nullmoth.SOURCE
+    name = src.package["name"] if src is not None and not src.builtin and src.package else nullmoth.PACKAGE["name"]
+    pinned = os.path.join(os.path.dirname(path), name)
     return pinned if os.path.isfile(pinned) else path
 
 
@@ -982,9 +1081,23 @@ def cli_write(argv):
     [--arm-apps]
     The Windows app's write step. Every line printed is "STEP|OK|PROGRESS|STOP ..." so the window can show it."""
     from . import apple, nullmoth, netsupport  # noqa: PLC0415
+    if _LINUX:
+        stop = _linux_preconditions()
+        if stop:
+            print(stop, flush=True); return 1
+    disks = None
+    if _LINUX and argv and argv[0].startswith("/dev/"):
+        # Linux: the stick may be named by its device path instead of its number
+        disks = list_disks()
+        by_path = next((d for d in disks if d.get("Path") == argv[0]), None)
+        if by_path is None:
+            print(f"STOP 1401-DISK-RENUMBERED: {argv[0]} is not attached any more. Nothing was erased. Press Refresh, "
+                  "pick the stick again and press Write.", flush=True); return 1
+        argv = [str(by_path["Number"])] + list(argv[1:])
     num, efi, darwin = int(argv[0]), argv[1], int(argv[2])
     def opt(n): return [argv[i + 1] for i, a in enumerate(argv) if a == n and i + 1 < len(argv)]
-    disks = list_disks()
+    if disks is None:
+        disks = list_disks()
     disk = next((d for d in disks if int(d.get("Number", -1)) == num), None)
     ident = (opt("--stick-id") or [""])[0], (opt("--stick-size") or [""])[0], (opt("--stick-name") or [""])[0]
     if any(ident):
@@ -1001,6 +1114,9 @@ def cli_write(argv):
         # silent, while the window had just listed the stick through the same MSFT_Disk class in-process. The stick had
         # not moved; this PowerShell could not see any disk. Say that, and log what the PowerShell is, so the next log
         # names the cause.
+        if _LINUX:
+            print("STOP 1401-DISK-LIST-EMPTY: lsblk listed no disks at all, so the stick cannot be checked before it is "
+                  "erased. Nothing was erased."); return 1
         _log_powershell_context()
         print("STOP 1401-DISK-LIST-EMPTY: Windows' storage service gave 1401 an empty list of disks - not even the disk "
               "Windows runs from - so the stick cannot be checked before it is erased. Nothing was erased. Restart the PC "
@@ -1013,7 +1129,7 @@ def cli_write(argv):
         # log shows whether the stick came back under another number or was not listed at all.
         usb = [f"{d.get('Number')}: {d.get('FriendlyName') or '?'} {int(d.get('Size') or 0) / GiB:.1f} GiB"
                for d in disks if d.get("BusType") == "USB"]
-        print(f"OK Windows lists {len(disks)} disk(s) now; USB: {', '.join(usb) or 'none'}")
+        print(f"OK {'Linux' if _LINUX else 'Windows'} lists {len(disks)} disk(s) now; USB: {', '.join(usb) or 'none'}")
         print(f"STOP 1401-DISK-RENUMBERED: Windows gave the stick a new disk number after it was picked (disk {num} is gone). "
               "Nothing was erased. The list of disks was reloaded: pick the stick again and press Write."); return 1
     ok, why = eligible(disk, "--allow-large" in argv)
@@ -1072,6 +1188,17 @@ def cli_write(argv):
     res = write(disk, efi, info, allow_large="--allow-large" in argv, progress=progress, machine_profile=handoff,
                 erase_os="--erase-os-partitions" in argv, opt_in=opt_in)
     root = res["root"]
+    try:
+        _finish_cli(argv, opt, opt_in, res, root)
+    finally:
+        if _LINUX:
+            root = finish_linux(res)
+    print(f"OK the stick is ready at {root}" + (" (NVIDIA driver included)" if res.get("nullmoth") else ""), flush=True)
+    return 0
+
+
+def _finish_cli(argv, opt, opt_in, res, root):
+    """cli_write's lines after the erase and payload: the profile note, the ARM apps note, the --extra files."""
     print('OK verified build profile written to the stick (live identity remains unverified)', flush=True)
     if opt_in:
         print('OK ARM apps requested: after macOS starts, the 1401 Mac app offers to finish setting them up, if this Mac can run them',
@@ -1080,16 +1207,40 @@ def cli_write(argv):
         d = os.path.join(root, "NullMoth"); os.makedirs(d, exist_ok=True)
         shutil.copyfile(f, os.path.join(d, os.path.basename(f)))
         print(f"OK copied {os.path.basename(f)} to the stick", flush=True)
-    print(f"OK the stick is ready at {root}" + (" (NVIDIA driver included)" if res.get("nullmoth") else ""), flush=True)
+
+
+def cli_list(argv):
+    """list [--all]: on Linux, the USB disks (every disk with --all) as JSON, each with "Eligible" and "Reasons" from
+    eligible(); elsewhere the same JSON as running the module with no arguments."""
+    disks = list_disks()
+    if not _LINUX:
+        print(json.dumps(disks, indent=2))
+        return 0
+    from . import linuxdisk  # noqa: PLC0415
+    shown = disks if "--all" in argv else linuxdisk.usb_only(disks)
+    for d in shown:
+        ok, why = eligible(d, "--allow-large" in argv)
+        d["Eligible"], d["Reasons"] = ok, why
+    print(json.dumps(shown, indent=2))
     return 0
 
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(0 if selftest() else 1)
+    _LINUX = platform.system() == "Linux"
+    if len(sys.argv) > 1 and sys.argv[1] == "list":
+        sys.exit(cli_list(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "write":
         try:
-            sys.exit(cli_write(sys.argv[2:]))
+            try:
+                rc = cli_write(sys.argv[2:])
+            finally:
+                if _LINUX and len(sys.argv) > 3:
+                    # the root writer may have made <EFI build>/.cache (driver package): hand it back to the user
+                    from p1401 import linuxdisk  # noqa: PLC0415
+                    linuxdisk.give_back(os.path.join(sys.argv[3], ".cache"))
+            sys.exit(rc)
         except Exception as e:  # the window shows the reason; nothing is retried behind the user's back
             import traceback  # noqa: PLC0415
             # where it stopped, module and line only (no user paths): 41 write reports through 1.1 said just
@@ -1097,4 +1248,4 @@ if __name__ == "__main__":
             where = [f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in traceback.extract_tb(e.__traceback__)][-4:]
             print(f"STOP {type(e).__name__}: {e}{stick_hint(e)}", flush=True)
             print("WHERE " + " < ".join(reversed(where)), flush=True); sys.exit(1)
-    print(json.dumps(list_disks(), indent=2))
+    sys.exit(cli_list(sys.argv[1:]))

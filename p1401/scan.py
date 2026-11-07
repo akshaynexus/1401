@@ -10,7 +10,10 @@ sys.modules. (A PyInstaller build needs its own entry point for `scan`; `-m` is 
 export_hardware_report prints an error and keeps going if the write fails, so its result isn't trusted: the
 report has to exist, parse, and list a CPU, motherboard, and GPU, and ACPI/ has to contain a DSDT.
 
-    python3 -m p1401.scan <out_dir>
+    python3 -m p1401.scan <out_dir> [--run-id <32 hex>]
+
+On Linux it has to run as root (only root can read /sys/firmware/acpi/tables); without root it stops before the
+hardware read with exit code 1 and says so. Run through sudo or pkexec, the folder is handed back to that user.
 """
 import hashlib
 import json
@@ -19,7 +22,7 @@ import platform
 import subprocess
 import sys
 from . import tls
-from . import hwcapture, scan_evidence, wine
+from . import hwcapture, linuxhost, scan_evidence, wine
 tls.install()   # downloads verify against the OS certificate store + certifi
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -277,8 +280,11 @@ def _storage_drives_section(rows):
 
 
 def collect_storage_drives():
-    """Windows only: the installed drives and their models, via PowerShell Get-Disk (FriendlyName is the model, BusType
-    tells USB from internal). Fail-safe: any error returns no rows, so the scan is never held up by this extra read."""
+    """The installed drives and their models: on Windows via PowerShell Get-Disk (FriendlyName is the model, BusType
+    tells USB from internal), on Linux via lsblk in the same row shape. Fail-safe: any error returns no rows, so the
+    scan is never held up by this extra read."""
+    if platform.system() == "Linux":
+        return linuxhost.storage_drive_rows()
     if platform.system() != "Windows":
         return []
     try:
@@ -316,13 +322,36 @@ def _add_storage_drives(out_dir):
         return
 
 
+# The worker's exit code when Linux will not let it read the ACPI tables (not root): the controller records why.
+ACPI_UNREADABLE = 3
+
+
+def linux_dump_acpi(out_dir):
+    """The Linux ACPI dump (linuxhost.dump_acpi_tables) in place of the Sniffer's, which runs an interactive sudo."""
+    acpi = os.path.join(out_dir, "ACPI")
+    print("Dumping tables to {}...".format(acpi))
+    try:
+        names = linuxhost.dump_acpi_tables(acpi)
+    except linuxhost.AcpiAccessError as error:
+        print(str(error), file=sys.stderr)
+        return
+    print(f"{len(names)} ACPI tables read from {linuxhost.ACPI_TABLES}")
+
+
 def _sniffer_body(out_dir, token):
+    if platform.system() == "Linux" and linuxhost.acpi_readable() is False:
+        # Before the hardware read, not after it: without the tables the build cannot run, so say so now.
+        print(linuxhost.ROOT_MESSAGE, file=sys.stderr, flush=True)
+        return ACPI_UNREADABLE
     sys.path.insert(0, SNIFFER)
     import HardwareSniffer  # noqa: PLC0415 - only importable with SNIFFER on the path, in this process only
     h = HardwareSniffer.HardwareSniffer(os.path.abspath(out_dir), rich_format=False)
     h.u.head = lambda *a, **k: None  # it clears the console; a child has none
     if platform.system() == "Windows":
         h.check_acpidump = acpidump_path  # pinned copy, not its own download
+    if platform.system() == "Linux":
+        linuxhost.patch_sniffer(h.hardware_info)   # physical cores, network paths, RAID/VMD, as the Windows report has them
+        h.dump_acpi_tables = lambda: linux_dump_acpi(out_dir)
     original_progress = h.hardware_info.utils.progress_bar
     def checkpoint_progress(*args, **kwargs):
         scan_evidence.save_partial(out_dir, token, getattr(h.hardware_info, "result", {}))
@@ -361,6 +390,15 @@ def _sniffer_child(out_dir, token):
 
 def _child(out_dir, run_id=None):
     """GUI and CLI share this controller: independent inventory first, bounded upstream scan second."""
+    if platform.system() != "Linux":
+        return _controller(out_dir, run_id)
+    try:
+        return _controller(out_dir, run_id)
+    finally:
+        linuxhost.give_back(out_dir)   # run as root for the ACPI tables: the user who ran sudo/pkexec owns the result
+
+
+def _controller(out_dir, run_id=None):
     token = scan_evidence.begin(out_dir, run_id)
     print("Scan run " + token, flush=True)
     under_wine = wine.version()
@@ -382,6 +420,7 @@ def _child(out_dir, run_id=None):
                            cwd=REPO, timeout=TIMEOUT)
         ok = p.returncode == 0 and not check(out_dir)
         if not ok: failure = "upstream_scan_failure"
+        if not ok and platform.system() == "Linux" and p.returncode == ACPI_UNREADABLE: failure = "acpi_tables_unreadable"
     except subprocess.TimeoutExpired:
         failure = "upstream_scan_timeout"
         print("Hardware Sniffer exceeded its time limit; the saved CPU/device inventory and partial sections remain available.", file=sys.stderr)

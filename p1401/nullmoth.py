@@ -33,8 +33,18 @@ PACKAGE = {"name": "nullmoth-nvidia-2.7.2.tar.gz",
            "url": "https://github.com/nullmoth/nvidia-macos-driver/releases/download/v2.7.2/nullmoth-nvidia-2.7.2.tar.gz",
            "sha256": "928557fece27637b1184f5655833566e7d516b22708cc341b28d555055d8e50e"}
 
+try:
+    from . import driver_source as _ds
+except ImportError:  # run as a file (tools/windows_release.py reads PACKAGE with runpy): NullMoth's pinned package only
+    _ds = None
+
 with open(os.path.join(HERE, "nvidia_gsp_ids.json")) as _fh:
-    TABLE = json.load(_fh)
+    OFFICIAL_TABLE = json.load(_fh)
+# A driver fork (driver_source.py) may name a card table of its own, merged over NullMoth's or replacing it. A config
+# that is there but wrong leaves NullMoth's table here and stops stage(): importing this module never fails on it.
+SOURCE, SOURCE_ERROR = _ds.load_safe() if _ds else (None, None)
+TABLE = _ds.card_table(OFFICIAL_TABLE, SOURCE) if _ds else OFFICIAL_TABLE
+STAGED = None  # what the last stage() put on a stick and how it was verified (source_info())
 
 
 def _pid(gpu):
@@ -195,19 +205,47 @@ def laptop_gpu_awake(cfg, result, live, change):
                    f"{name}: keeps the laptop's discrete GPU powered for the NullMoth driver (acpi-wake-type)")
             props["acpi-wake-type"] = 1
 
-def stage(usb_root, cache_dir, fetch=None):
-    """Puts the driver package on the stick under NullMoth/. Verifies SHA-256 before and after copying; a mismatch
-    raises and leaves nothing behind. fetch(url, path) downloads; None = the package must already be in cache_dir."""
+def _sha(p):
     import hashlib  # noqa: PLC0415
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for b in iter(lambda: fh.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def _put(src, d, name, want):
+    """Copies the checked package into the stick's NullMoth folder and reads it back."""
     import shutil  # noqa: PLC0415
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, name)
+    # The source was just checked against its SHA-256, so a copy that reads back wrong is the stick. Copied once more
+    # first, like an EFI file (24fdc83); a second mismatch stops with the stick advice (1.15 write logs 10-14).
+    for attempt in range(2):
+        shutil.copyfile(src, dst + ".part")
+        if _sha(dst + ".part") == want:
+            break
+        os.remove(dst + ".part")
+        if attempt:
+            raise RuntimeError("the driver package read back different from the stick after two copies")
+        print("(the driver package read back wrong from the stick; copying it again)", flush=True)
+    os.replace(dst + ".part", dst)
+    return dst
 
-    def sha(p):
-        h = hashlib.sha256()
-        with open(p, "rb") as fh:
-            for b in iter(lambda: fh.read(1 << 20), b""):
-                h.update(b)
-        return h.hexdigest()
 
+def stage(usb_root, cache_dir, fetch=None, source=None):
+    """Puts the driver package on the stick under NullMoth/. Verifies SHA-256 before and after copying; a mismatch
+    raises and leaves nothing behind. fetch(url, path) downloads; None = the package must already be in cache_dir.
+    With a driver source configured (driver_source.py, SOURCE) the package comes from that repository's release instead,
+    checked against the release's SHA256SUMS.txt and its signature (_stage_release)."""
+    global STAGED
+    if source is None:
+        if SOURCE_ERROR:
+            raise RuntimeError(f"the NVIDIA driver source config is wrong - nothing was written for the driver: {SOURCE_ERROR}")
+        source = SOURCE
+    if source is not None and not source.builtin:
+        return _stage_release(usb_root, cache_dir, fetch, source)
+    sha = _sha
     src = os.path.join(cache_dir, PACKAGE["name"])
     if not os.path.exists(src) or sha(src) != PACKAGE["sha256"]:
         if fetch is None:
@@ -218,24 +256,168 @@ def stage(usb_root, cache_dir, fetch=None):
             raise RuntimeError("driver package download does not match its SHA-256 - not written to the stick")
         os.replace(src + ".part", src)
     d = os.path.join(usb_root, "NullMoth")
-    os.makedirs(d, exist_ok=True)
-    dst = os.path.join(d, PACKAGE["name"])
-    # The source was just checked against its SHA-256, so a copy that reads back wrong is the stick. Copied once more
-    # first, like an EFI file (24fdc83); a second mismatch stops with the stick advice (1.15 write logs 10-14).
-    for attempt in range(2):
-        shutil.copyfile(src, dst + ".part")
-        if sha(dst + ".part") == PACKAGE["sha256"]:
-            break
-        os.remove(dst + ".part")
-        if attempt:
-            raise RuntimeError("the driver package read back different from the stick after two copies")
-        print("(the driver package read back wrong from the stick; copying it again)", flush=True)
-    os.replace(dst + ".part", dst)
+    dst = _put(src, d, PACKAGE["name"], PACKAGE["sha256"])
+    if _ds and os.path.exists(os.path.join(d, _ds.STICK_MANIFEST)):  # a fork's manifest left from an earlier write
+        os.remove(os.path.join(d, _ds.STICK_MANIFEST))
     with open(os.path.join(d, "README.txt"), "w") as fh:
         fh.write("NullMoth NVIDIA driver for macOS 15 and macOS 26.\n"
                  "After macOS finishes installing, the 1401 Mac companion installs this package.\n"
                  "By hand: tar -xzf " + PACKAGE["name"] + " && cd pkgroot && sudo ./install.sh\n")
+    STAGED = {"source": source.info() if source is not None else None, "package": PACKAGE["name"],
+              "sha256": PACKAGE["sha256"], "verified": "pinned SHA-256 in 1401", "path": dst}
     return dst
+
+
+def release_assets(get_json, get_text, api):
+    """(release json, {asset name: https url}, {name: sha256 from the release's SHA256SUMS.txt})."""
+    rel = get_json(api)
+    assets = {a.get("name"): a.get("browser_download_url") for a in (rel or {}).get("assets", []) if isinstance(a, dict)}
+    sums_url = assets.get("SHA256SUMS.txt")
+    if not sums_url:
+        raise RuntimeError(f"the {'latest ' if api.endswith('/latest') else ''}driver release has no SHA256SUMS.txt")
+    sums = {}
+    for line in get_text(sums_url).splitlines():
+        f = line.split()
+        if len(f) >= 2 and re.fullmatch(r"[0-9a-fA-F]{64}", f[0]):
+            sums[f[-1]] = f[0].lower()
+    return rel, assets, sums
+
+
+def resolve(source, get_json, get_text):
+    """The package a configured source names: {name, url, sha256, version, tag, sig, bsig}. The SHA-256 is the one
+    SHA256SUMS.txt of that same release lists (and must equal a pinned one); every URL is under the source's own
+    github.com/<repo>/releases/download/."""
+    rel, assets, sums = release_assets(get_json, get_text, source.release_api())
+    prefix = f"https://github.com/{source.repo}/releases/download/".lower()
+    ours = lambda u: bool(u) and str(u).lower().startswith(prefix)  # noqa: E731
+    if source.package:
+        name = source.package["name"]
+        if sums.get(name) != source.package["sha256"]:
+            raise RuntimeError(f"SHA256SUMS.txt of github.com/{source.repo} {source.tag or 'latest'} does not list {name} "
+                               "with the SHA-256 in the driver source config - nothing was written for the driver")
+        if assets.get(name) != source.package["url"]:
+            raise RuntimeError(f"{name} is not an asset of github.com/{source.repo} {source.tag} at the configured url")
+    else:
+        best = None
+        for n, u in assets.items():
+            m = _PKG_RE.match(n or "")
+            if m and ours(u) and n in sums and (best is None or _vkey(m.group(1)) > _vkey(_PKG_RE.match(best).group(1))):
+                best = n
+        if best is None:
+            raise RuntimeError(f"the github.com/{source.repo} release has no driver package listed in SHA256SUMS.txt")
+        name = best
+    url = assets[name]
+    if not ours(url):
+        raise RuntimeError(f"{name} is not served from github.com/{source.repo} - refused")
+    sig, bsig = assets.get(name + ".sig"), assets.get(name + ".bsig")
+    return {"name": name, "url": url, "sha256": sums[name], "version": _PKG_RE.match(name).group(1),
+            "tag": (rel or {}).get("tag_name") or source.tag, "sig": sig if ours(sig) else None,
+            "bsig": bsig if ours(bsig) else None}
+
+
+def _check_signature(path, pkg, fetch, key, product="nullmoth-nvidia"):
+    """Raises unless pkg's .sig (over the bytes) or .bsig (bound to product, version, hash) verifies against `key`."""
+    from . import release_sig  # noqa: PLC0415
+    tried = []
+    for kind in ("sig", "bsig"):
+        url = pkg.get(kind)
+        if not url:
+            continue
+        tried.append(kind)
+        tmp = path + "." + kind
+        fetch(url, tmp)
+        try:
+            with open(tmp, encoding="ascii", errors="replace") as fh:
+                text = fh.read(4096)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        ok = (release_sig.verify_file(path, text, key) if kind == "sig" else
+              release_sig.verify_bound(pkg["sha256"], product, pkg["version"], text, key))
+        if ok:
+            return kind
+    if not tried:
+        raise RuntimeError(f"{pkg['name']} has no signature in its release ({pkg['name']}.sig / .bsig) - not written to the stick")
+    raise RuntimeError(f"{pkg['name']}'s signature does not verify against the driver source's key - not written to the stick")
+
+
+def _stage_release(usb_root, cache_dir, fetch, source):
+    """stage() for a configured source (a fork, or a NullMoth release other than the pinned one). Needs the network to
+    read the release, even when the package is already in cache_dir: its SHA256SUMS.txt and signature are checked."""
+    global STAGED
+    from . import release_sig  # noqa: PLC0415
+    if fetch is None:
+        raise RuntimeError(f"the driver from github.com/{source.repo} needs the network to check its release")
+    os.makedirs(cache_dir, exist_ok=True)
+    meta = os.path.join(cache_dir, ".driver-release.part")
+
+    def get_text(url):
+        fetch(url, meta)
+        try:
+            with open(meta, encoding="utf-8", errors="replace") as fh:
+                return fh.read(8 << 20)
+        finally:
+            try:
+                os.remove(meta)
+            except OSError:
+                pass
+    pkg = resolve(source, lambda u: json.loads(get_text(u)), get_text)
+    print(f"NOTE NVIDIA driver source: {source.label()}; package {pkg['name']} from release {pkg['tag']}", flush=True)
+    src = os.path.join(cache_dir, pkg["name"])
+    if not (os.path.exists(src) and _sha(src) == pkg["sha256"]):
+        fetch(pkg["url"], src + ".part")
+        if _sha(src + ".part") != pkg["sha256"]:
+            os.remove(src + ".part")
+            raise RuntimeError(f"{pkg['name']} does not match the SHA-256 in its release's SHA256SUMS.txt - not written to the stick")
+        os.replace(src + ".part", src)
+    key = source.key(release_sig.PUBLIC_KEY)
+    if key:
+        try:
+            kind = _check_signature(src, pkg, fetch, key)
+        except RuntimeError:
+            os.remove(src)
+            raise
+        verified = ("NullMoth release key" if key == release_sig.PUBLIC_KEY else f"fork key {key}") + f" ({kind})"
+    elif source.allow_unsigned:
+        verified = "UNSIGNED (allow_unsigned)"
+        print(f"NOTE WARNING: {pkg['name']} from github.com/{source.repo} is NOT SIGNED. Only its release's own "
+              "SHA256SUMS.txt was checked, which whoever controls that release can change. It runs as root on the Mac. "
+              "The driver source config allows this (allow_unsigned).", flush=True)
+    else:  # driver_source.from_dict refuses this config; kept so no path skips the check
+        raise RuntimeError(f"github.com/{source.repo} has no signing key configured - not written to the stick")
+    d = os.path.join(usb_root, "NullMoth")
+    dst = _put(src, d, pkg["name"], pkg["sha256"])
+    who = ("NullMoth NVIDIA driver" if source.official else
+           f"NVIDIA driver from a FORK of the NullMoth driver: github.com/{source.repo} (not a NullMoth release)")
+    warn = ("" if key else
+            "\n*** WARNING: THIS PACKAGE IS NOT SIGNED. ***\n"
+            "Only its release's own SHA256SUMS.txt was checked; whoever controls that release can change both.\n"
+            "It runs as root on the Mac. The driver source config allowed this (allow_unsigned).\n\n")
+    with open(os.path.join(d, "README.txt"), "w") as fh:
+        fh.write(f"{who} for macOS 15 and macOS 26.\n" + warn +
+                 f"Release {pkg['tag']}, package {pkg['name']}, SHA-256 {pkg['sha256']}.\n"
+                 f"Checked against: SHA256SUMS.txt of that release; signature: {verified}.\n"
+                 "After macOS finishes installing, the 1401 Mac companion installs this package.\n"
+                 "By hand: tar -xzf " + pkg["name"] + " && cd pkgroot && sudo ./install.sh\n")
+    # read by the Mac companion (DriverSource.swift): which package on this stick to offer, its SHA-256, and from whom
+    manifest = {"format": 1, "repo": source.repo, "official": source.official, "release": pkg["tag"],
+                "package": {"name": pkg["name"], "sha256": pkg["sha256"], "version": pkg["version"], "url": pkg["url"]},
+                "signature": verified, "signed": bool(key), "public_key": key,
+                "cards": TABLE if source.cards else None}
+    with open(os.path.join(d, _ds.STICK_MANIFEST), "w") as fh:
+        json.dump(manifest, fh, indent=1, sort_keys=True)
+    STAGED = {"source": source.info(), "package": pkg["name"], "sha256": pkg["sha256"], "release": pkg["tag"],
+              "verified": verified, "path": dst}
+    return dst
+
+
+def source_info():
+    """For the build result and log: the driver source in use, any config error, and what the last stage() placed."""
+    src = SOURCE
+    return {"source": src.info() if src is not None else None, "label": src.label() if src is not None else
+            "NullMoth official (pinned in 1401)", "error": SOURCE_ERROR, "staged": STAGED}
 
 
 def system_profile(report):
@@ -259,19 +441,11 @@ def _vkey(v):
     return tuple(int(x) for x in v.split("."))
 
 
-def latest_release(get_json, get_text):
+def latest_release(get_json, get_text, api=None):
     """The newest driver release: {"driver": (name, url, sha256), "mac": (name, url, sha256) or None}. Hashes come from
-    the SHA256SUMS.txt published in the same release; a package it does not list is refused."""
-    rel = get_json(RELEASE_API)
-    assets = {a.get("name"): a.get("browser_download_url") for a in rel.get("assets", []) if isinstance(a, dict)}
-    sums_url = assets.get("SHA256SUMS.txt")
-    if not sums_url:
-        raise RuntimeError("the latest driver release has no SHA256SUMS.txt")
-    sums = {}
-    for line in get_text(sums_url).splitlines():
-        f = line.split()
-        if len(f) >= 2 and re.fullmatch(r"[0-9a-fA-F]{64}", f[0]):
-            sums[f[-1]] = f[0].lower()
+    the SHA256SUMS.txt published in the same release; a package it does not list is refused. api = another release
+    list (a configured driver source's, driver_source.Source.release_api()); None = NullMoth's latest."""
+    _, assets, sums = release_assets(get_json, get_text, api or RELEASE_API)
     out = {"driver": None, "mac": None}
     for name, url in assets.items():
         for key, rx in (("driver", _PKG_RE), ("mac", _MAC_RE)):
@@ -282,6 +456,7 @@ def latest_release(get_json, get_text):
     if out["driver"] is None:
         raise RuntimeError("the latest release has no driver package listed in SHA256SUMS.txt")
     out["sigs"] = {n: u for n, u in assets.items() if n and n.endswith(".sig") and u and u.startswith("https://")}
+    out["bsigs"] = {n: u for n, u in assets.items() if n and n.endswith(".bsig") and u and u.startswith("https://")}
     return out
 
 
@@ -306,10 +481,12 @@ def _signed(path, name, sig_url, fetch, key):
         raise RuntimeError(f"{name}'s signature is not NullMoth's - nothing was changed")
 
 
-def update(dirs, rel, fetch, sigkey=None):
+def update(dirs, rel, fetch, sigkey=None, allow_unsigned=False, bound=False):
     """Puts the newest driver package (and 1401 Mac app) from `rel` into every folder in `dirs` (the app's NullMoth
     folder, then any 1401 stick's NullMoth folder), verified by SHA-256, and removes older copies there - the stick
-    writer takes the first package it finds. Downloads once, into dirs[0]. Returns the lines to show."""
+    writer takes the first package it finds. Downloads once, into dirs[0]. Returns the lines to show.
+    A configured driver source (_cli_update): bound = a <name>.bsig is accepted too, and allow_unsigned with no sigkey
+    places an unsigned fork package with a warning line (driver_source.py refuses that config without the setting)."""
     import hashlib  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
@@ -329,20 +506,31 @@ def update(dirs, rel, fetch, sigkey=None):
         os.makedirs(dirs[0], exist_ok=True)
         src = os.path.join(dirs[0], name)
         sig_url = (rel.get("sigs") or {}).get(name + ".sig")
+
+        def signed(path):
+            if sigkey is None and allow_unsigned:
+                lines.append(f"WARNING: {name} is NOT SIGNED (the driver source config allows it); only its release's "
+                             "SHA256SUMS.txt was checked")
+            elif bound:
+                _check_signature(path, {"name": name, "sha256": want, "version": rx.match(name).group(1), "sig": sig_url,
+                                        "bsig": (rel.get("bsigs") or {}).get(name + ".bsig")}, fetch, sigkey,
+                                 "nullmoth-nvidia" if key == "driver" else "1401-mac")
+            else:
+                _signed(path, name, sig_url, fetch, sigkey)
         if not (os.path.exists(src) and sha(src) == want):
             fetch(url, src + ".part")
             if sha(src + ".part") != want:
                 os.remove(src + ".part")
                 raise RuntimeError(f"{name} does not match the SHA-256 published with it - nothing was replaced")
             try:
-                _signed(src + ".part", name, sig_url, fetch, sigkey)
+                signed(src + ".part")
             except RuntimeError:
                 os.remove(src + ".part")
                 raise
             os.replace(src + ".part", src)
             lines.append(f"downloaded {name}")
         else:
-            _signed(src, name, sig_url, fetch, sigkey)
+            signed(src)
         for d in dirs:
             os.makedirs(d, exist_ok=True)
             dst = os.path.join(d, name)
@@ -610,9 +798,22 @@ def _cli_update(dirs):
             shutil.copyfileobj(r, fh, 1 << 20)
 
     try:
-        rel = latest_release(lambda u: json.loads(get(u)), lambda u: get(u).decode("utf-8", "replace"))
+        src = SOURCE
+        if SOURCE_ERROR:
+            raise RuntimeError(f"the NVIDIA driver source config is wrong: {SOURCE_ERROR}")
+        if src is None or src.builtin:
+            rel = latest_release(lambda u: json.loads(get(u)), lambda u: get(u).decode("utf-8", "replace"))
+            kw = {}
+        else:
+            from . import release_sig  # noqa: PLC0415
+            print(f"driver source: {src.label()}")
+            rel = latest_release(lambda u: json.loads(get(u)), lambda u: get(u).decode("utf-8", "replace"), src.release_api())
+            if not src.official:
+                rel["mac"] = None  # the 1401 Mac app comes only from NullMoth, never from a driver fork's release
+            key = src.key(release_sig.PUBLIC_KEY)
+            kw = {"sigkey": key, "allow_unsigned": key is None and src.allow_unsigned, "bound": True}
         print(f"newest driver: {rel['driver'][0]}" + (f", Mac app: {rel['mac'][0]}" if rel["mac"] else ""))
-        for line in update(dirs, rel, fetch):
+        for line in update(dirs, rel, fetch, **kw):
             print(line)
         print("RESULT ok")
         return 0

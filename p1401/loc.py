@@ -132,6 +132,14 @@ ZH = {
         "它会写入本机的启动文件，并直接从 Apple 下载 {}，逐项校验每个文件的 Apple 签名。",
     "Before you restart, take a photo of this page with your phone. You can't see it while you're in the BIOS.":
         "重启前，用手机把这个页面拍下来。在 BIOS 里你是看不到它的。",
+    "Restart straight into your BIOS setup: in a terminal, run `systemctl reboot --firmware-setup`.":
+        "直接重启进入 BIOS 设置：在终端中运行 `systemctl reboot --firmware-setup`。",
+    "Change the settings below, then Save & Exit (on most boards [[F10]]). Let Linux start once to check it still boots.":
+        "修改下面的设置，然后选择 Save & Exit（大多数主板按 [[F10]]）。让 Linux 启动一次，确认它仍能正常启动。",
+    "Leave the stick plugged in. If the BIOS already lists it as a boot entry, `sudo efibootmgr --bootnext <number>` and a restart start it once (`efibootmgr` alone lists the numbers).":
+        "保持 U 盘插着。如果 BIOS 已把它列为启动项，运行 `sudo efibootmgr --bootnext <编号>` 后重启，即可从它启动一次（单独运行 `efibootmgr` 可列出编号）。",
+    "If this PC also has Windows with BitLocker on: save its recovery key first (aka.ms/myrecoverykey), and in Windows suspend BitLocker before you change the BIOS. Changing Secure Boot with BitLocker running makes Windows ask for that key. Without Windows on this PC, skip this step.":
+        "如果这台电脑上还装有开启了 BitLocker 的 Windows：请先保存它的恢复密钥（aka.ms/myrecoverykey），并在更改 BIOS 之前在 Windows 中暂停 BitLocker。在 BitLocker 运行时更改安全启动，Windows 会要求输入该密钥。如果这台电脑上没有 Windows，请跳过此步骤。",
     "Click **Restart into BIOS setup** in the app. Windows restarts straight into your BIOS setup.":
         "在应用中点击 **Restart into BIOS setup**。Windows 会直接重启进入 BIOS 设置。",
     "Restart and press the setup key as soon as the PC powers on.":

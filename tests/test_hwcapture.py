@@ -125,7 +125,8 @@ class Capture(unittest.TestCase):
         self.assertIn((3, 12582912, 8), {(c["level"], c["bytes"], c["shared_by"]) for c in t["caches"]})
 
     def test_topology_off_windows_is_unavailable_not_guessed(self):
-        with patch.object(hc.sys, "platform", "linux"):
+        # Linux reads sysfs instead (tests/test_linux_engine_sniffer.py); a system with neither API stays unavailable
+        with patch.object(hc.sys, "platform", "darwin"):
             r = hc.cpu_topology()
         self.assertEqual(r["status"], "unavailable"); self.assertNotIn("value", r)
 

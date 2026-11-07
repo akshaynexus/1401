@@ -1,0 +1,173 @@
+#!/usr/bin/python3 -I
+"""The one part of 1401 on Linux that runs as root, started by the window through pkexec (or by hand with sudo).
+
+    pkexec /path/to/linux/1401-helper [--lang en|zh-CN] p1401.scan <scan dir> --run-id <32 hex>
+    pkexec /path/to/linux/1401-helper [--lang en|zh-CN] p1401.usbwriter write <disk> <EFI dir> <darwin> [options]
+
+It runs only those two engine steps, from the engine folder this file sits in (never one named on the command line),
+with the same interpreter options the window uses, and checks every argument first. The folders the step writes into
+must already exist and belong to the person who asked; afterwards everything the step created there is given back to
+them, so the window (which never runs as root) keeps owning its working files."""
+import os
+import re
+import stat
+import subprocess
+import sys
+
+ENGINE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+FLAGS = ["-E", "-s", "-B", "-X", "utf8", "-u"]
+WRITE_VALUE_OPTIONS = {"--stick-id", "--stick-size", "--stick-name", "--driver", "--extra", "--profile"}
+WRITE_FLAGS = {"--allow-large", "--arm-apps", "--erase-os-partitions"}
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def refuse(why):
+    print("STOP 1401-HELPER: " + why + " Nothing was run.", flush=True)
+    sys.exit(2)
+
+
+def caller():
+    """The uid and gid of the person pkexec or sudo ran this for."""
+    for name in ("PKEXEC_UID", "SUDO_UID"):
+        value = os.environ.get(name, "")
+        if value.isdigit():
+            uid = int(value)
+            try:
+                import pwd
+                return uid, pwd.getpwuid(uid).pw_gid
+            except KeyError:
+                refuse("the calling user is unknown.")
+    refuse("run it through pkexec or sudo, not as root directly.")
+
+
+def driver_source_env(uid):
+    """pkexec drops the caller's environment and HOME is /root here, so the engine would miss the person's NVIDIA driver
+    fork config (driver_source.py) and stage NullMoth's package while their build used the fork's card table. Point the
+    engine at the caller's own ~/.config/NullMoth/1401/driver-source.json, or pin the official driver when there is none.
+    The engine validates the file strictly; a symlinked or foreign-owned one is refused here."""
+    try:
+        import pwd
+        home = pwd.getpwuid(uid).pw_dir
+    except KeyError:
+        return "official"
+    path = os.path.join(home, ".config", "NullMoth", "1401", "driver-source.json")
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return "official"
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+        refuse(f"{path} is not a plain file owned by you.")
+    return path
+
+
+def own_dir(path, uid, what):
+    """An existing real folder (no symbolic link anywhere in it) that belongs to the caller."""
+    if not os.path.isabs(path) or "\0" in path or os.path.realpath(path) != os.path.normpath(path):
+        refuse(f"{what} must be an absolute path without symbolic links.")
+    try:
+        st = os.lstat(path)
+    except OSError:
+        refuse(f"{what} does not exist.")
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+        refuse(f"{what} must be a folder that belongs to you.")
+    return path
+
+
+def a_file(path, what):
+    if not os.path.isabs(path) or "\0" in path or not os.path.isfile(path):
+        refuse(f"{what} must be an existing file named by its absolute path.")
+    return path
+
+
+def check_scan(args, uid):
+    if len(args) != 3 or args[1] != "--run-id" or not re.fullmatch(r"[0-9a-f]{32}", args[2]):
+        refuse("p1401.scan takes <scan dir> --run-id <run id>.")
+    out = own_dir(args[0], uid, "The scan folder")
+    if os.path.basename(out) != "scan-" + args[2]:
+        refuse("the scan folder must be named after its run id.")
+    own_dir(os.path.dirname(out), uid, "The working folder")
+    return [out]
+
+
+def check_write(args, uid):
+    if len(args) < 4 or args[0] != "write":
+        refuse("p1401.usbwriter takes write <disk> <EFI dir> <darwin major> [options].")
+    if not re.fullmatch(r"\d{1,4}", args[1]) or not re.fullmatch(r"\d{2}", args[3]):
+        refuse("the disk number and the macOS version must be numbers.")
+    efi = own_dir(args[2], uid, "The EFI folder")
+    i = 4
+    while i < len(args):
+        a = args[i]
+        if a in WRITE_FLAGS:
+            i += 1
+            continue
+        if a not in WRITE_VALUE_OPTIONS or i + 1 >= len(args):
+            refuse(f"unknown writer option {a!r}.")
+        value = args[i + 1]
+        if "\0" in value or len(value) > 4096:
+            refuse(f"the value of {a} is not usable.")
+        if a in ("--driver", "--extra", "--profile"):
+            a_file(value, a)
+        if a == "--stick-size" and not value.isdigit():
+            refuse("--stick-size must be a number of bytes.")
+        i += 2
+    return [efi]
+
+
+def give_back(top, uid, gid):
+    """Everything under top that root made (owned by uid 0), back to the caller. Never follows a link, never leaves
+    the file system top is on."""
+    try:
+        dev = os.lstat(top).st_dev
+    except OSError:
+        return
+    for root, dirs, files in os.walk(top, followlinks=False):
+        for name in [""] + dirs + files:
+            path = os.path.join(root, name) if name else root
+            try:
+                st = os.lstat(path)
+                if st.st_dev == dev and st.st_uid == 0:
+                    os.lchown(path, uid, gid)
+            except OSError:
+                pass
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+
+
+def main(argv):
+    if os.geteuid() != 0:
+        refuse("this helper needs root; the 1401 window starts it through pkexec.")
+    uid, gid = caller()
+    lang = "en"
+    if argv[:1] == ["--lang"] and len(argv) > 1:
+        lang = "zh-CN" if argv[1].lower().startswith("zh") else "en"
+        argv = argv[2:]
+    if not argv:
+        refuse("no step was named.")
+    module, args = argv[0], argv[1:]
+    if not os.path.isfile(os.path.join(ENGINE, "p1401", "__init__.py")):
+        refuse(f"the engine is missing next to this helper ({ENGINE}).")
+    if module == "p1401.scan":
+        owned = check_scan(args, uid)
+    elif module == "p1401.usbwriter":
+        owned = check_write(args, uid)
+    else:
+        refuse(f"{module!r} is not a step that needs root.")
+    env = {"PATH": PATH, "LANG": "C.UTF-8", "PYTHONNOUSERSITE": "1", "PYTHONIOENCODING": "utf-8",
+           "PYTHONDONTWRITEBYTECODE": "1", "A1401_LANG": lang, "HOME": "/root", "A1401_CALLER_UID": str(uid),
+           "A1401_CALLER_GID": str(gid), "PKEXEC_UID": str(uid),
+           "P1401_DRIVER_SOURCE": driver_source_env(uid)}
+    for name in ("SUDO_UID", "SUDO_GID", "SUDO_USER"):   # the engine hands its own files back through these too
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    print(f"OK administrator rights granted; running {module} as root", flush=True)
+    try:
+        rc = subprocess.call([sys.executable] + FLAGS + ["-m", module] + args, cwd=ENGINE, env=env)
+    finally:
+        for top in owned:
+            give_back(top, uid, gid)
+    # 126 and 127 are pkexec's own answers (no password, no agent); a step that ends that way is reported as 1
+    return 1 if rc in (126, 127) else rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

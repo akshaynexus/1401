@@ -1,0 +1,10 @@
+#!/bin/sh
+# 1401 for Linux. Starts the window as you (never as root); the two steps that need root ask through pkexec.
+here=$(dirname "$(readlink -f "$0")")
+py=/usr/bin/python3
+[ -x "$py" ] || py=$(command -v python3)
+if [ -z "$py" ]; then
+    echo "1401: python3 was not found. See docs/LINUX.md for the packages 1401 needs." >&2
+    exit 1
+fi
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -B -m one401_gtk "$@"

@@ -549,7 +549,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDe
         }
     }
 
-    func scan() -> [String: Any] { App.scanMac(table) }
+    func scan() -> [String: Any] { App.scanMac(DriverSource.merged(table, DriverSource.entries())) }
     static func loadedDriverComponentCount(_ listing: String) -> Int {
         let expected: Set<String> = ["com.nullmoth.NVRM", "com.nullmoth.NVRMFB", "com.nullmoth.NVAccel", "com.nullmoth.NVRMAGDC"]
         let words = Set(listing.split(whereSeparator: { $0.isWhitespace }).map(String.init))
@@ -759,9 +759,15 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDe
         var c = ((try? fm.contentsOfDirectory(atPath: "/Volumes")) ?? []).map { URL(fileURLWithPath: "/Volumes/\($0)/NullMoth/\(Package.name)") }
         c.append(fm.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appendingPathComponent(Package.name))
         c.append(support.appendingPathComponent(Package.name))
+        // a stick 1401 wrote for another driver source names its package (DriverSource.swift); listed after this app's own
+        let other = DriverSource.entries()
+        c.removeAll { u in other.contains { $0.path == u.path } }
         return c.filter { fm.fileExists(atPath: $0.path) }.map { u in
             ["path": u.path, "where": u.path.hasPrefix("/Volumes/") ? "the 1401 stick or disk image" : u.path.contains("/Downloads/") ? "Downloads" : "an earlier download",
              "ok": sha256(u) == Package.sha256 ? "yes" : "no"]
+        } + other.map { e in
+            ["path": e.path, "where": DriverSource.describe(e), "ok": sha256(URL(fileURLWithPath: e.path)) == e.sha256 ? "yes" : "no",
+             "source": e.repo, "fork": e.official ? "no" : "yes", "signed": e.signed ? "yes" : "no"]
         }
     }
 
@@ -1299,6 +1305,19 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDe
     func run(mode: String, pkg: String, efi: String, extra: [String], expectedSha: String? = nil) {
         guard ["dry", "install", "remove", "usbmap", "verbose", "tahoe", "tahoecancel"].contains(mode),
               !runningSetup, pendingDownload == nil else { return }
+        // A package a stick names for another driver source (DriverSource.swift) is checked against that manifest's
+        // SHA-256, and a fork's is installed only after the user confirms who it comes from.
+        let source = pkg.isEmpty || expectedSha != nil ? nil : DriverSource.entry(forPackage: pkg)
+        if let source, ["install", "tahoe"].contains(mode), let w = DriverSource.warning(source) {
+            let a = NSAlert(); a.alertStyle = .critical
+            a.messageText = w.title; a.informativeText = w.text
+            a.addButton(withTitle: "Cancel"); a.addButton(withTitle: "Install the fork's driver")
+            guard a.runModal() == .alertSecondButtonReturn else {
+                send("run", ["state": "end", "mode": mode, "ok": false, "why": "Not installed: the driver on this stick is from a fork, and installing it was cancelled."])
+                return
+            }
+        }
+        let expectedSha = expectedSha ?? source?.sha256
         runningSetup = true
         // Ask once, at install time, whether to send a single confirmation when this Mac first reaches its desktop
         // after the install (ReachedDesktop). Nothing today tells us whether an install actually booted through, so a
@@ -1318,7 +1337,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDe
             // The version and time ride in the log itself: a sent log is otherwise unattributable once it is retained.
             let stamp = ISO8601DateFormatter().string(from: Date())
             let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-            log = try SavedReports.create(Data("Setup \(mode) started (1401 Mac \(app), driver \(Package.version), \(stamp)).\n".utf8), in: directory, name: "setup-\(mode).log")
+            let from = source.map { "Driver package \($0.name) from github.com/\($0.repo)\($0.official ? "" : " (FORK)"), signature: \($0.signature.isEmpty ? "none" : $0.signature).\n" } ?? ""
+            log = try SavedReports.create(Data("Setup \(mode) started (1401 Mac \(app), driver \(Package.version), \(stamp)).\n\(from)".utf8), in: directory, name: "setup-\(mode).log")
         } catch {
             runningSetup = false
             send("run", ["state": "end", "mode": mode, "ok": false, "why": "Could not save a local report: \(error.localizedDescription)"])
@@ -1425,7 +1445,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKUIDe
 let argv = CommandLine.arguments
 func table() -> [String: Any] {
     guard let d = try? Data(contentsOf: Bundle.main.resourceURL!.appendingPathComponent("nvidia_gsp_ids.json")) else { return [:] }
-    return (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
+    return DriverSource.merged((try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:], DriverSource.entries())
 }
 if argv == [argv[0], "--hardware-map"] {
     var map = HardwareMap.collect()

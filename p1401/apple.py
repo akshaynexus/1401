@@ -604,11 +604,26 @@ def download(info, usb_root, progress=None):
 
 def _read_uncached(path, block=1 << 20):
     """The file's bytes as the stick holds them. On Windows the read bypasses the file cache (FILE_FLAG_NO_BUFFERING),
-    so a stick that lost or changed data after taking it is seen, not the copy still in RAM. Elsewhere: a plain read."""
+    so a stick that lost or changed data after taking it is seen, not the copy still in RAM. On Linux the file is
+    flushed and its cached pages dropped (POSIX_FADV_DONTNEED) before and while it is read, so the bytes come from the
+    stick too. Elsewhere: a plain read."""
     if os.name != "nt":
+        drop = getattr(os, "posix_fadvise", None) if sys.platform.startswith("linux") else None
         with open(path, "rb") as fh:
+            if drop:
+                try:
+                    os.fsync(fh.fileno())
+                    drop(fh.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                except OSError:
+                    drop = None  # a file system that cannot do this is read as it is
             for b in iter(lambda: fh.read(block), b""):
                 yield b
+                if drop:
+                    try:
+                        # what was read already: the image never fills RAM, and read-ahead pages are kept
+                        drop(fh.fileno(), 0, max(0, fh.tell() - block), os.POSIX_FADV_DONTNEED)
+                    except OSError:
+                        drop = None
         return
     import ctypes  # noqa: PLC0415 - Windows only
     from ctypes import wintypes  # noqa: PLC0415

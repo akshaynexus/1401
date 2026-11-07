@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=1401
+GenericName=macOS installer maker
+Comment=Check this PC, build an OpenCore setup for it and write a macOS install stick
+Comment[zh_CN]=检测本机，为它构建 OpenCore 启动环境并制作 macOS 安装盘
+Exec=1401
+Icon=com.nullmoth.A1401
+Terminal=false
+Categories=System;GTK;
+Keywords=macOS;OpenCore;Hackintosh;USB;installer;
+StartupNotify=true
+StartupWMClass=com.nullmoth.A1401

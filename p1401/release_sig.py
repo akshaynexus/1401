@@ -109,6 +109,17 @@ def verify_file(path, signature, public_key=PUBLIC_KEY):
         return False
 
 
+def bound_message(product, version, sha256):
+    """What a .bsig signs (ReleaseSignature.boundMessage in the Mac app): product, version and the bytes' SHA-256, so
+    one signed file cannot stand in for another product or an older version."""
+    return f"nullmoth-release-v1\n{product}\n{version}\n{sha256}\n".encode()
+
+
+def verify_bound(sha256, product, version, signature, public_key=PUBLIC_KEY):
+    """verify() of a .bsig: `sha256` is the lowercase hex digest of the file's bytes."""
+    return verify(bound_message(product, version, sha256.lower()), signature, public_key)
+
+
 def _verify(feed, signature, public_key):
     try:
         if isinstance(signature, str):
