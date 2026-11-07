@@ -29,6 +29,7 @@ from . import amd_gpu
 from . import amd_rdna4
 from . import intel_gpu
 from . import community
+from . import helios300
 from . import downloads
 from . import netsupport
 from . import nullmoth
@@ -294,7 +295,8 @@ PROMPT_RULES = [
     (r"^Select Intel Wi-Fi kext \(default", lambda p, c, pol: _intel_wifi_answer(c)),
     (r"^Do you want to force load", lambda p, c, pol: "yes" if pol.force_load_unsupported_kexts else "no"),
     (r"^Would you like to scan for WiFi profiles", lambda p, c, pol: "yes" if pol.import_wifi_passwords else "no"),
-    (r"^Enter the ID of the codec layout", ""),
+    # "" = the engine's pick; a machine profile (helios300: ALC255 layout 29) names the exact layout instead.
+    (r"^Enter the ID of the codec layout", lambda p, c, pol: pol.prefer.get("CodecLayout", "")),
     (r"^Select a .* combination \(\d+-\d+\)", _choose_last),
     (r"^Select a .* device \(\d+-\d+\)", _choose_device),
 ]
@@ -909,6 +911,12 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
             if not isinstance(res.hardware, dict):
                 raise RuntimeError("The hardware report must contain a JSON object. Run Check this PC again.")
             res.raw_hardware = copy.deepcopy(res.hardware)
+            # Acer Predator Helios 300 G3-571: its own drivers come from the macos_helios300 release (helios300.py).
+            helios_hit = helios300.detect(res.raw_hardware)
+            helios_rel = helios_why = None
+            helios_kept = []
+            if helios_hit:
+                policy = h.policy = helios300.prepare(policy, helios_hit, h.notices)
             if not os.path.isdir(acpi_dir) or not os.listdir(acpi_dir):
                 raise RuntimeError("Check this PC did not save the ACPI tables. Run Check this PC again (as administrator).")
             res.acpi_fingerprints = report_mod.acpi_fingerprints(acpi_dir)
@@ -917,6 +925,15 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
             o = mod.OCPE()
             o.result_dir = out_dir
             _use_ock_cache(o)
+            if helios_hit:
+                try:
+                    helios_rel, helios_why = helios300.load_release(
+                        (lambda url: downloads.make_request(o.o.fetcher, url).read()) if download else None,
+                        os.path.join(os.path.dirname(OCK_CACHE), "helios300-release"))
+                except helios300.ReleaseError as e:
+                    raise RuntimeError(f"The macos_helios300 release for this laptop failed its checks, so nothing was built: {e}") from e
+                h.notices.append(f"macos_helios300 {helios_rel.version} ({helios_rel.source['kind']})" if helios_rel else
+                                 f"macos_helios300: {helios_why}")
             valid, errors, warnings, report = o.v.validate_report(rpath)
             if not valid or errors:
                 raise RuntimeError(f"hardware report rejected: {errors}")
@@ -935,6 +952,8 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
             o.c.hardware_report = _wifi_prepass(hw, policy, h, o)
             mv = o.select_macos_version(native, oclp_versions, o.c.get_suggested_macos_version())
             cust, disabled, needs_oclp = o.h.hardware_customization(hw, mv)
+            if helios_hit:   # the GPU, Wi-Fi and Bluetooth the release drives are not disabled (no disable-gpu, no _OFF SSDT)
+                disabled, helios_kept = helios300.keep_devices(disabled, helios_rel, mv, h.notices)
             from . import panel_guard, scan_evidence
             capture = scan_evidence.load_for_report(report_path, res.raw_hardware, expected_report_sha256=res.report_sha256)
             keep = panel_guard.intel_panel_keys(disabled, capture)
@@ -958,6 +977,8 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
             o.ac.select_acpi_patches(cust, disabled)
             needs_oclp = o.k.select_required_kexts(cust, mv, needs_oclp, o.ac.patches)
             _tahoe_audio_keep_choice(o.k.kexts, h.policy.tahoe_audio)
+            if helios_hit:
+                helios300.select_kexts(o.k, mv, helios_rel, h.notices)
             netsupport.apply_kexts(o, cust, mv, h.notices, experimental=policy.experimental_drivers)   # MediaTek Wi-Fi/BT, if this machine has one and the user opted in
             amd_rdna4.apply_kexts(o, cust, mv, h.notices, experimental=policy.experimental_drivers)    # RX 9070 display driver, same opt-in
             community.apply_kexts(o, cust, mv, h.notices, experimental=policy.experimental_drivers)    # Realtek/Qualcomm Wi-Fi, BT, input, USB fixes
@@ -1007,7 +1028,16 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
                 netsupport.add_missing_bt_ids(out_dir, cust, h.notices)   # MediaTek BT IDs the kext does not list (#336)
                 _keep_identity(out_dir, prior_identity, machine_key, h)
                 res.decisions = h.decisions  # the policy pass reads what was decided
-                res.policy_changes = policy_mod.apply(os.path.join(out_dir, "EFI", "OC", "config.plist"), res, policy)
+                helios_changes = []
+                if helios_hit:
+                    def helios_change(rule, before, after, why):
+                        helios_changes.append({"rule": rule, "before": before, "after": after, "why": why})
+                    helios_change("helios-detected", "", helios_hit["name"], "DMI product and the GTX 1060 with Acer's subsystem 1025:118b")
+                    if helios_rel is not None:
+                        helios300.apply(os.path.join(out_dir, "EFI", "OC", "config.plist"), helios_rel, mv, res.raw_hardware, helios_change)
+                    for rule in helios300.notes(res, helios_rel, helios_why, helios_kept):
+                        helios_change(*rule)
+                res.policy_changes = helios_changes + policy_mod.apply(os.path.join(out_dir, "EFI", "OC", "config.plist"), res, policy)
                 community.apply_efi_drivers(os.path.join(out_dir, "EFI", "OC", "config.plist"), cust, mv, h.notices,
                                             lambda url: downloads.make_request(o.o.fetcher, url).read(),
                                             experimental=policy.experimental_drivers)
