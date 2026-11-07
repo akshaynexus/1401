@@ -192,11 +192,52 @@ class Manifest(unittest.TestCase):
         with self.assertRaises(helios300.ReleaseError):
             helios300.check_manifest(m)
 
-    def test_no_pin_means_no_release(self):
+    def test_no_pin_and_no_published_release(self):
         with mock.patch.object(helios300, "pin", return_value={"tag": None, "manifest_sha256": None}):
-            rel, why = helios300.load_release(fetch=lambda u: self.fail("must not fetch"), env={})
+            rel, why = helios300.load_release(fetch=lambda u: b"[]", cache_dir=tempfile.mkdtemp(), env={})
         self.assertIsNone(rel)
-        self.assertIn("not pinned", why.replace("is pinned", "not pinned"))
+        self.assertIn("no macos_helios300 release has been published", why)
+
+    def test_no_pin_uses_the_latest_release_including_pre_releases(self):
+        m, blobs = make_release()
+        raw = json.dumps(m).encode()
+        listing = [{"tag_name": "v0.2.0", "draft": True, "assets": [{"name": "manifest.json"}]},
+                   {"tag_name": "v0.1.0", "prerelease": True, "assets": [{"name": "manifest.json"}, {"name": "PG106.kext.zip"}]}]
+        urls = []
+
+        def fetch(url):
+            urls.append(url)
+            if url == helios300.API_RELEASES:
+                return json.dumps(listing).encode()
+            return raw if url.endswith("/v0.1.0/manifest.json") else blobs[url.rsplit("/", 1)[1]]
+        cache = tempfile.mkdtemp()
+        with mock.patch.object(helios300, "pin", return_value={"tag": None, "manifest_sha256": None}):
+            rel, _ = helios300.load_release(fetch=fetch, cache_dir=cache, env={})
+            self.assertEqual((rel.version, rel.source["pinned"], rel.source["tag"]), ("0.1.0", False, "v0.1.0"))
+            rel.blob(rel.artifact("PG106.kext"))
+            # offline afterwards: the newest cached release, no listing needed
+            rel2, _ = helios300.load_release(fetch=None, cache_dir=cache, env={})
+        self.assertEqual(rel2.version, "0.1.0")
+        rel2.blob(rel2.artifact("PG106.kext"))
+        self.assertEqual(urls[0], helios300.API_RELEASES)
+
+    def test_listing_fails_offline_falls_back_to_cache(self):
+        def boom(url):
+            raise OSError("network down")
+        with mock.patch.object(helios300, "pin", return_value={"tag": None, "manifest_sha256": None}):
+            rel, why = helios300.load_release(fetch=boom, cache_dir=tempfile.mkdtemp(), env={})
+        self.assertIsNone(rel)
+        self.assertIn("could not be listed", why)
+
+    def test_a_release_directory_is_used_as_is(self):
+        d = os.path.dirname(release_dir())
+        rel, _ = helios300.load_release(fetch=lambda u: self.fail("no network for a local release"), manifest=d, env={})
+        self.assertEqual(rel.source["kind"], "local")
+        rel.blob(rel.artifact("PG106.kext"))
+
+    def test_a_named_tag_must_look_like_one(self):
+        with self.assertRaises(helios300.ReleaseError):
+            helios300.load_release(fetch=lambda u: b"", release="main; rm -rf /", env={})
 
     def test_pinned_manifest_checked_and_cached_for_offline_use(self):
         m, blobs = make_release()
@@ -369,6 +410,97 @@ class PolicyPass(unittest.TestCase):
             args = plistlib.load(fh)["NVRAM"]["Add"][BOOT].get("boot-args", "").split()
         for a in nullmoth.BOOT_ARGS:
             self.assertNotIn(a, args)
+
+
+class Cli(unittest.TestCase):
+    def policy_for(self, *argv):
+        from p1401 import __main__ as cli  # noqa: PLC0415
+        seen = {}
+
+        def fake_build(report, acpi, out, pol, echo=False, download=True):
+            seen["policy"], seen["download"] = pol, download
+            return engine.BuildResult(ok=True, out_dir=out)
+        with mock.patch.object(engine, "build", fake_build), mock.patch("sys.stdout", io.StringIO()):
+            cli.main(["build", REPORT, "acpi", tempfile.mkdtemp(), *argv])
+        return seen["policy"]
+
+    def test_default_is_the_published_release(self):
+        pol = self.policy_for()
+        self.assertEqual((pol.helios_release, pol.helios_manifest, pol.helios_build_from_source), ("", "", False))
+
+    def test_release_dir_and_manifest(self):
+        self.assertEqual(self.policy_for("--release-dir", "/r").helios_manifest, "/r")
+        self.assertEqual(self.policy_for("--manifest", "/r/manifest.json").helios_manifest, "/r/manifest.json")
+        self.assertEqual(self.policy_for("--release", "latest").helios_release, "latest")
+
+    def test_build_from_source(self):
+        pol = self.policy_for("--build-from-source", "--ref", "v0.1.0")
+        self.assertTrue(pol.helios_build_from_source)
+        self.assertEqual(pol.helios_ref, "v0.1.0")
+
+
+class BuildFromSource(unittest.TestCase):
+    """Source mode only drives macos_helios300's own tools/release.sh; nothing is built by 1401."""
+
+    def run_mode(self, ref, release_rc=0, write_manifest=True, env=None):
+        work = tempfile.mkdtemp()
+        calls = []
+
+        def run(cmd, cwd=None, **kw):
+            calls.append((cmd, cwd))
+            if cmd[0] == "git":
+                if cmd[1] == "clone":
+                    os.makedirs(os.path.join(cmd[-1], ".git"))
+                out = "0123456789abcdef0123456789abcdef01234567" if cmd[1] == "rev-parse" else ""
+                return mock.Mock(returncode=0, stdout=out, stderr="")
+            dist = cmd[cmd.index("--dist") + 1]
+            if release_rc == 0 and write_manifest:
+                os.makedirs(dist, exist_ok=True)
+                with open(os.path.join(dist, "manifest.json"), "w") as fh:
+                    fh.write("{}")
+            return mock.Mock(returncode=release_rc)
+        result = helios300.build_from_source(ref, work, run=run, env=env or {})
+        return result, calls, work
+
+    def test_runs_release_sh_with_the_tag_version(self):
+        manifest, calls, work = self.run_mode("v0.1.0")
+        git = [c[0][1] for c in calls if c[0][0] == "git"]
+        self.assertEqual(git[:2], ["clone", "fetch"])
+        self.assertIn("checkout", git)
+        self.assertIn(["git", "submodule", "update", "--init", "--quiet"], [c[0] for c in calls])
+        release = [c for c in calls if c[0][0] == "bash"]
+        self.assertEqual(len(release), 1)
+        cmd, cwd = release[0]
+        src = os.path.join(work, "macos_helios300")
+        self.assertEqual(cmd, ["bash", os.path.join(src, "tools", "release.sh"), "--version", "0.1.0",
+                               "--dist", os.path.join(work, "dist")])
+        self.assertEqual(cwd, src)
+        self.assertEqual(manifest, os.path.join(work, "dist", "manifest.json"))
+
+    def test_a_commit_gets_a_source_version(self):
+        _, calls, _ = self.run_mode("main")
+        cmd = next(c[0] for c in calls if c[0][0] == "bash")
+        self.assertEqual(cmd[cmd.index("--version") + 1], "0.0.0-src.0123456789ab")
+
+    def test_iaf2_is_passed_through(self):
+        _, calls, _ = self.run_mode("v0.1.0", env={"HELIOS_IAF2": "/x/IOAcceleratorFamily2"})
+        cmd = next(c[0] for c in calls if c[0][0] == "bash")
+        self.assertEqual(cmd[-2:], ["--iaf2", "/x/IOAcceleratorFamily2"])
+
+    def test_missing_toolchain_says_where_to_get_it(self):
+        with self.assertRaises(helios300.ReleaseError) as e:
+            self.run_mode("v0.1.0", release_rc=77)
+        self.assertIn("cross toolchain", str(e.exception))
+        self.assertIn("docs/MANIFEST.md", str(e.exception))
+
+    def test_failed_build_stops(self):
+        with self.assertRaises(helios300.ReleaseError) as e:
+            self.run_mode("v0.1.0", release_rc=1)
+        self.assertIn("release.sh failed", str(e.exception))
+
+    def test_bad_ref_refused(self):
+        with self.assertRaises(helios300.ReleaseError):
+            helios300.build_from_source("--upload-pack=x", tempfile.mkdtemp(), run=lambda *a, **k: self.fail("ran"))
 
 
 @unittest.skipUnless(os.environ.get("A1401_HELIOS_ACPI"), "set A1401_HELIOS_ACPI to the Helios ACPI dump (not in git)")
