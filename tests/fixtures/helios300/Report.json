@@ -1,0 +1,460 @@
+{
+ "Motherboard": {
+  "Name": "ACER PREDATOR G3-571",
+  "Chipset": "HM175",
+  "Platform": "Laptop"
+ },
+ "BIOS": {
+  "Version": "V1.22",
+  "Release Date": "03/15/2019",
+  "Firmware Type": "UEFI",
+  "Secure Boot": "Disabled",
+  "Above 4G Decoding": "Disabled"
+ },
+ "CPU": {
+  "Manufacturer": "Intel",
+  "Processor Name": "Intel(R) Core(TM) i7-7700HQ",
+  "Codename": "Kaby Lake-H",
+  "Core Count": "04",
+  "CPU Count": "01",
+  "SIMD Features": "SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2, AVX, AVX2"
+ },
+ "GPU": {
+  "NVIDIA Corporation GP106M [GeForce GTX 1060 Mobile]": {
+   "Manufacturer": "NVIDIA",
+   "Codename": "Pascal",
+   "Device Type": "Discrete GPU",
+   "Bus Type": "PCI",
+   "Device ID": "10DE-1C20",
+   "Subsystem ID": "118B1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1,0x0)/Pci(0x0,0x0)",
+   "ACPI Path": "\\_SB.PCI0.PEG0.PEGP",
+   "Resizable BAR": "Disabled"
+  },
+  "Intel Corporation Kaby Lake-H GT2 [HD Graphics 630]": {
+   "Manufacturer": "Intel",
+   "Codename": "Kaby Lake",
+   "Device Type": "Integrated GPU",
+   "Bus Type": "PCI",
+   "Device ID": "8086-591B",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x2,0x0)",
+   "ACPI Path": "\\_SB.PCI0.GFX0",
+   "Resizable BAR": "Disabled"
+  }
+ },
+ "Monitor": {
+  "CMN15D3": {
+   "Connector Type": "eDP",
+   "Resolution": "1920x1080",
+   "Connected GPU": "Intel Corporation Kaby Lake-H GT2 [HD Graphics 630]"
+  }
+ },
+ "Network": {
+  "Qualcomm Atheros QCA6174 802.11ac Wireless Network Adapter": {
+   "Bus Type": "PCI",
+   "Device ID": "168C-003E",
+   "Subsystem ID": "080711AD",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x0)/Pci(0x0,0x0)",
+   "ACPI Path": "\\_SB.PCI0.RP03.PXSX"
+  },
+  "Realtek Semiconductor Co., Ltd. RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "10EC-8168",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x3)/Pci(0x0,0x1)"
+  }
+ },
+ "Sound": {
+  "Realtek ALC255": {
+   "Bus Type": "HDAUDIO",
+   "Device ID": "10EC-0255",
+   "Subsystem ID": "1025118A",
+   "Controller Device ID": "8086-A171",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1f,0x3)",
+   "ACPI Path": "\\_SB.PCI0.HDAS",
+   "Audio Endpoints": [
+    "ALC255 Analog"
+   ]
+  },
+  "Nvidia GPU 84 HDMI/DP": {
+   "Bus Type": "HDAUDIO",
+   "Device ID": "10DE-0084",
+   "Subsystem ID": "1025118B",
+   "Controller Device ID": "10DE-10F1",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1,0x0)/Pci(0x0,0x1)",
+   "Audio Endpoints": [
+    "HDMI 0",
+    "HDMI 1",
+    "HDMI 2",
+    "HDMI 3"
+   ]
+  },
+  "Lite-On Technology Corp.": {
+   "Bus Type": "USB",
+   "Device ID": "04CA-3016"
+  }
+ },
+ "USB Controllers": {
+  "Intel Corporation 100/C230 Series Chipset Family USB 3.0 xHCI Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A12F",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x14,0x0)",
+   "ACPI Path": "\\_SB.PCI0.XHC_"
+  }
+ },
+ "Input": {
+  "Acer WMI hotkeys": {
+   "Bus Type": "ACPI",
+   "Device": "ACERWMIH",
+   "Device Type": "Keyboard"
+  },
+  "SYNA7DB5:01 06CB:7DB7 Mouse": {
+   "Bus Type": "ACPI",
+   "Device ID": "06CB-7DB7",
+   "Device Type": "I2C"
+  },
+  "Video Bus": {
+   "Bus Type": "ACPI",
+   "Device": "VIDEOBUS",
+   "Device Type": "Keyboard"
+  },
+  "AT Translated Set 2 keyboard": {
+   "Bus Type": "ACPI",
+   "Device ID": "0001-0001",
+   "Device Type": "PS/2"
+  },
+  "Acer Wireless Radio Control": {
+   "Bus Type": "ACPI",
+   "Device ID": "1025-1229",
+   "Device Type": "Keyboard"
+  }
+ },
+ "Storage Controllers": {
+  "Intel Corporation HM170/QM170 Chipset SATA Controller [AHCI Mode]": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A103",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x17,0x0)",
+   "ACPI Path": "\\_SB.PCI0.SAT0"
+  }
+ },
+ "Bluetooth": {
+  "Lite-On Technology Corp.": {
+   "Bus Type": "USB",
+   "Device ID": "04CA-3016"
+  }
+ },
+ "SD Controller": {
+  "Realtek Semiconductor Co., Ltd. RTL8411B PCI Express Card Reader": {
+   "Bus Type": "PCI",
+   "Device ID": "10EC-5287",
+   "Subsystem ID": "118A1025",
+   "ACPI Path": "\\_SB.PCI0.RP04.PXSX"
+  }
+ },
+ "System Devices": {
+  "i2c_designware": {
+   "Bus Type": "PLATFORM",
+   "Device": "i2c_designware",
+   "ACPI Path": "\\_SB.PCI0.I2C1"
+  },
+  "PNP0C14": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C14",
+   "ACPI Path": "\\_SB.PCI0.WMID"
+  },
+  "alarmtimer": {
+   "Bus Type": "PLATFORM",
+   "Device": "alarmtimer"
+  },
+  "rtsx_pci_sdmmc": {
+   "Bus Type": "PLATFORM",
+   "Device": "rtsx_pci_sdmmc",
+   "ACPI Path": "\\_SB.PCI0.RP04.PXSX"
+  },
+  "iTCO_wdt": {
+   "Bus Type": "PLATFORM",
+   "Device": "iTCO_wdt"
+  },
+  "PNP0C0D": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0D",
+   "ACPI Path": "\\_SB.PCI0.LPCB.LID0"
+  },
+  "PNP0C09": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C09",
+   "ACPI Path": "\\_SB.PCI0.LPCB.EC0_"
+  },
+  "PNP0C0A": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0A",
+   "ACPI Path": "\\_SB.PCI0.LPCB.BAT1"
+  },
+  "acer-wmi": {
+   "Bus Type": "PLATFORM",
+   "Device": "acer-wmi"
+  },
+  "PNP0C0B": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0B"
+  },
+  "ACPI0003": {
+   "Bus Type": "ACPI",
+   "Device": "ACPI0003",
+   "ACPI Path": "\\_SB.PCI0.LPCB.ACAD"
+  },
+  "INT345D": {
+   "Bus Type": "ACPI",
+   "Device": "INT345D",
+   "ACPI Path": "\\_SB.PCI0.GPI0"
+  },
+  "acpi-cpufreq": {
+   "Bus Type": "PLATFORM",
+   "Device": "acpi-cpufreq"
+  },
+  "INT33A1": {
+   "Bus Type": "ACPI",
+   "Device": "INT33A1",
+   "ACPI Path": "\\_SB.PEPD"
+  },
+  "LNXTHERM": {
+   "Bus Type": "ACPI",
+   "Device": "LNXTHERM"
+  },
+  "PNP0C0B_#1": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0B"
+  },
+  "INT3F0D": {
+   "Bus Type": "ACPI",
+   "Device": "INT3F0D",
+   "ACPI Path": "\\_SB.PCI0.LPCB.CWDT"
+  },
+  "PNP0B00": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0B00",
+   "ACPI Path": "\\_SB.PCI0.LPCB.RTC_"
+  },
+  "LNXPWRBN": {
+   "Bus Type": "ACPI",
+   "Device": "LNXPWRBN"
+  },
+  "intel_rapl_msr": {
+   "Bus Type": "PLATFORM",
+   "Device": "intel_rapl_msr"
+  },
+  "PNP0C0C": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0C",
+   "ACPI Path": "\\_SB.PWRB"
+  },
+  "idma64": {
+   "Bus Type": "PLATFORM",
+   "Device": "idma64",
+   "ACPI Path": "\\_SB.PCI0.I2C1"
+  },
+  "ACPI000C": {
+   "Bus Type": "ACPI",
+   "Device": "ACPI000C",
+   "ACPI Path": "\\_SB.PAGD"
+  },
+  "rtc-efi": {
+   "Bus Type": "PLATFORM",
+   "Device": "rtc-efi"
+  },
+  "INT0800": {
+   "Bus Type": "ACPI",
+   "Device": "INT0800",
+   "ACPI Path": "\\_SB.PCI0.LPCB.FWHD"
+  },
+  "PNP0C14_#1": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C14",
+   "ACPI Path": "\\_SB.PCI0.WMI1"
+  },
+  "INT340E": {
+   "Bus Type": "ACPI",
+   "Device": "INT340E",
+   "ACPI Path": "\\_SB.PTID"
+  },
+  "PNP0C0B_#2": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0B"
+  },
+  "i2c_designware_#1": {
+   "Bus Type": "PLATFORM",
+   "Device": "i2c_designware",
+   "ACPI Path": "\\_SB.PCI0.I2C0"
+  },
+  "PNP0C0B_#3": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0B"
+  },
+  "coretemp": {
+   "Bus Type": "PLATFORM",
+   "Device": "coretemp"
+  },
+  "PNP0C0E": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0E",
+   "ACPI Path": "\\_SB.SLPB"
+  },
+  "TPM 2.0 Device": {
+   "Bus Type": "ACPI",
+   "Device": "MSFT0101",
+   "ACPI Path": "\\_SB.TPM_"
+  },
+  "LNXTHERM_#1": {
+   "Bus Type": "ACPI",
+   "Device": "LNXTHERM"
+  },
+  "PNP0C0B_#4": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C0B"
+  },
+  "PNP0103": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0103",
+   "ACPI Path": "\\_SB.PCI0.LPCB.HPET"
+  },
+  "PNP0C04": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C04",
+   "ACPI Path": "\\_SB.PCI0.LPCB.MATH"
+  },
+  "10251229": {
+   "Bus Type": "ACPI",
+   "Device": "10251229"
+  },
+  "efivars": {
+   "Bus Type": "PLATFORM",
+   "Device": "efivars"
+  },
+  "serial8250": {
+   "Bus Type": "PLATFORM",
+   "Device": "serial8250"
+  },
+  "i8042": {
+   "Bus Type": "PLATFORM",
+   "Device": "i8042"
+  },
+  "PNP0C14_#2": {
+   "Bus Type": "ACPI",
+   "Device": "PNP0C14",
+   "ACPI Path": "\\_SB.WTBT"
+  },
+  "pcspkr": {
+   "Bus Type": "PLATFORM",
+   "Device": "pcspkr"
+  },
+  "idma64_#1": {
+   "Bus Type": "PLATFORM",
+   "Device": "idma64",
+   "ACPI Path": "\\_SB.PCI0.I2C0"
+  },
+  "Realtek Semiconductor Co., Ltd. RTL8411B PCI Express Card Reader": {
+   "Bus Type": "PCI",
+   "Device ID": "10EC-5287",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x3)/Pci(0x0,0x0)",
+   "ACPI Path": "\\_SB.PCI0.RP04.PXSX"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family PMC": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A121",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1f,0x2)",
+   "ACPI Path": "\\_SB.PCI0.PPMC"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family PCIe Root Port #3": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A112",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x0)",
+   "ACPI Path": "\\_SB.PCI0.RP03"
+  },
+  "Intel Corporation 6th-10th Gen Core Processor PCIe Controller (x16)": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-1901",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1,0x0)",
+   "ACPI Path": "\\_SB.PCI0.PEG0"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family PCIe Root Port #4": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A113",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x3)",
+   "ACPI Path": "\\_SB.PCI0.RP04"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family I2C #1": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A161",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x15,0x1)",
+   "ACPI Path": "\\_SB.PCI0.I2C1"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family I2C #0": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A160",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x15,0x0)",
+   "ACPI Path": "\\_SB.PCI0.I2C0"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family Thermal Subsystem": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A131",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x14,0x2)"
+  },
+  "Intel Corporation HM175 Chipset LPC/eSPI Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A152",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1f,0x0)",
+   "ACPI Path": "\\_SB.PCI0.LPCB"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family MEI #1": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A13A",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x16,0x0)",
+   "ACPI Path": "\\_SB.PCI0.HECI"
+  },
+  "Realtek Semiconductor Co., Ltd. RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "10EC-8168",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1c,0x3)/Pci(0x0,0x1)"
+  },
+  "Intel Corporation HM175/QM175/CM238 HD Audio Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A171",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1f,0x3)",
+   "ACPI Path": "\\_SB.PCI0.HDAS"
+  },
+  "NVIDIA Corporation GP106 High Definition Audio Controller": {
+   "Bus Type": "PCI",
+   "Device ID": "10DE-10F1",
+   "Subsystem ID": "118B1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1,0x0)/Pci(0x0,0x1)"
+  },
+  "Intel Corporation Xeon E3-1200 v6/7th Gen Core Processor Host Bridge/DRAM Registers": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-5910",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x0,0x0)"
+  },
+  "Intel Corporation 100/C230 Series Chipset Family SMBus": {
+   "Bus Type": "PCI",
+   "Device ID": "8086-A123",
+   "Subsystem ID": "118A1025",
+   "PCI Path": "PciRoot(0x0)/Pci(0x1f,0x4)",
+   "ACPI Path": "\\_SB.PCI0.SBUS"
+  }
+ }
+}
