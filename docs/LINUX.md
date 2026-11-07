@@ -8,6 +8,17 @@ check your own EFI.
 > Run 1401 on the PC you want macOS on. It reads that PC's hardware and ACPI tables, so the Linux system must be
 > running on that PC itself, not in a virtual machine.
 
+## Arch / CachyOS quick start
+
+```bash
+git clone -b linux-port https://github.com/akshaynexus/1401
+cd 1401
+linux/setup-arch.sh   # installs the packages below with pacman (asks for your password once) and checks them
+linux/run.sh          # starts 1401 from the checkout; runs the setup first if anything is missing
+```
+
+Nothing is installed besides the packages; `linux/install.sh` is only for adding 1401 to the app menu.
+
 ## What you need
 
 - Python 3.10 or newer with PyGObject.
@@ -24,11 +35,12 @@ check your own EFI.
 | WebKitGTK (optional) | `webkitgtk-6.0` | `webkitgtk6.0` | `gir1.2-webkit-6.0` |
 | polkit | `polkit` | `polkit` | `pkexec` (older releases: `policykit-1`) |
 | disk tools | `util-linux dosfstools` | `util-linux dosfstools` | `util-linux fdisk dosfstools` |
+| iasl (ACPI compiler) | `acpica` | `acpica-tools` | `acpica-tools` |
 
 ```bash
-sudo pacman -S --needed python python-gobject gtk4 libadwaita webkitgtk-6.0 polkit util-linux dosfstools
-sudo dnf install python3 python3-gobject gtk4 libadwaita webkitgtk6.0 polkit util-linux dosfstools
-sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 pkexec util-linux fdisk dosfstools
+sudo pacman -S --needed python python-gobject gtk4 libadwaita webkitgtk-6.0 polkit util-linux dosfstools acpica
+sudo dnf install python3 python3-gobject gtk4 libadwaita webkitgtk6.0 polkit util-linux dosfstools acpica-tools
+sudo apt install python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 pkexec util-linux fdisk dosfstools acpica-tools
 ```
 
 Debian 12 and Ubuntu 22.04 ship a libadwaita that is too old for this window.
