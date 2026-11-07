@@ -65,11 +65,22 @@ driver (Turing and newer). Their drivers come from the owner's
 [macos_helios300](https://github.com/akshaynexus/macos_helios300) releases, and 1401 builds the laptop's macOS 26 EFI
 from that release's `manifest.json` ([contract](https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md)):
 
-- **The manifest is pinned** by tag and SHA-256 in `p1401/helios300_release.json`. Every file is checked against the
-  manifest, and every file inside a zipped bundle too, before it goes into the EFI. Files are cached next to the
-  engine's own download cache (`helios300-release/<tag>/`), so a rebuild works offline. A release that fails a check
-  stops the build. Until the first release is published, the pin is empty: the Helios builds on its HD 630 with the
-  laptop basics, and the build result says the GPU, Wi-Fi and Bluetooth drivers were not added.
+- **1401 builds nothing for it.** macos_helios300's own `tools/release.sh` builds every file and its manifest,
+  and publishes them as a GitHub (pre-)release. 1401 downloads `manifest.json` from that release's assets and
+  downloads every file it lists, then checks each SHA-256 (and every file inside a zipped bundle). It unpacks them
+  into the EFI in the manifest's Kernel > Add order and applies the manifest's SSDTs, DeviceProperties, NVRAM and
+  boot-args. No SDK, toolchain or cross-build is involved.
+- **Which release**: the tag + manifest SHA-256 pinned in `p1401/helios300_release.json`, or the latest release
+  (pre-releases included) while nothing is pinned, or `--release vX.Y.Z|latest`. Files are cached next to the
+  engine's download cache (`helios300-release/<tag>/`), so a rebuild works offline. A file that fails a check stops
+  the build. With no release published and none cached, the Helios builds on its HD 630 with the laptop basics, and
+  the build result says the GPU, Wi-Fi and Bluetooth drivers were not added.
+- **Local release**: `--release-dir DIR` (a release directory such as macos_helios300's `dist/`) or `--manifest PATH`,
+  for offline builds or before a release exists. It is recorded as *LOCAL, UNPINNED* in the build result.
+- **Build from source (optional)**: `--build-from-source [--ref <tag|commit|branch>]` clones macos_helios300 at that
+  ref with its submodules and runs *its* `tools/release.sh`. The `dist/manifest.json` it writes then goes through
+  exactly the same checks and assembly. It needs macos_helios300's Linux cross toolchain (macOS 26 SDK, Apple ld64,
+  ...); without it the build stops and names the docs to follow (macos_helios300 `docs/MANIFEST.md`).
 - **macOS 26 only** (the release's MinKernel 25.0.0). A macOS 15 build gets the laptop basics without the release.
 - **Laptop basics** on top of what OpCore-Simplify picks (VirtualSMC + SMCBatteryManager + SMCProcessor, ECEnabler,
   WhateverGreen with the Kaby Lake laptop platform-id `0x591B0000`, RealtekRTL8111, USBToolBox, BrightnessKeys,
@@ -85,8 +96,11 @@ from that release's `manifest.json` ([contract](https://github.com/akshaynexus/m
   SIP for them, and the result lists the step. Then install `EFI/Helios300` from the stick (README there).
 - The stick is written by the usual writer (`p1401.usbwriter write`); the post-install kit is part of the EFI it copies.
 
-To test a release before it is published: `A1401_HELIOS_MANIFEST=<macos_helios300>/dist/manifest.json python3 -m p1401
-build ...`. A local manifest (even a `--dry-run` one) is used as is and recorded as *LOCAL, UNPINNED* in the build result.
+```bash
+python3 -m p1401 build Report.json ACPI out --macos 25                         # the published release (default)
+python3 -m p1401 build Report.json ACPI out --macos 25 --release-dir ~/macos_helios300/dist   # a local one
+python3 -m p1401 build Report.json ACPI out --macos 25 --build-from-source --ref v0.1.0      # build it yourself
+```
 
 ## Tests
 

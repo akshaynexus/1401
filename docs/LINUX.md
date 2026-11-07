@@ -130,7 +130,7 @@ On a machine with no display, run these under `gtk4-broadwayd :5 &` with `GDK_BA
 
 Run on the Helios, 1401 recognises it from the scan (DMI product `Predator G3-571` and the GTX 1060 Mobile with
 Acer's subsystem `1025:118b`). Its macOS 26 build then takes the GPU, Wi-Fi, Bluetooth and HDMI-audio drivers from
-the pinned [macos_helios300](https://github.com/akshaynexus/macos_helios300) release (README, "Acer Predator Helios
+the published [macos_helios300](https://github.com/akshaynexus/macos_helios300) release, downloaded and checked file by file (README, "Acer Predator Helios
 300 G3-571"). Pick **macOS 26 Tahoe**: the release is built for it only. The stick is written the usual way; the
 drivers macOS has to install itself (PG106Accel, the Metal plugin, NVK) are on it in `EFI/Helios300` with a README.
 
