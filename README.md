@@ -10,6 +10,10 @@ an OpenCore setup for it and writes a macOS install stick. It is free and open s
 - How it works: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)
 - NVIDIA driver for macOS: [nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)
 
+> **This is [akshaynexus/1401](https://github.com/akshaynexus/1401), the owner's fork of nullmoth/1401** (branch
+> `linux-port`: the Linux app, and the Acer Predator Helios 300 profile below). Changes here stay in this fork.
+> nullmoth/1401 does not accept AI-written pull requests (AGENTS.md, CONTRIBUTING.md), so none are opened upstream.
+
 1401 has been tested end to end on a small number of PCs, so expect problems on others. If it doesn't work on yours,
 the [OpenCore Install Guide](https://dortania.github.io/OpenCore-Install-Guide/) covers setting OpenCore up by hand.
 
@@ -46,12 +50,50 @@ Every rule that fires is recorded in the build result.
 | `keep-boot-args` | the stick never overwrites the boot arguments of a machine that already runs macOS |
 | `nullmoth-boot-args`, `nullmoth-sip` | NVIDIA card in the driver's table: macOS 15, the driver's boot arguments, SIP `0x0A43` |
 | `nullmoth-installer-bar` | NVIDIA card: small BAR for the installer (`ResizeAppleGpuBars 0`, `ResizeGpuBars -1`) so its screen survives PCI setup; the Mac app restores the full BAR after install |
+| `helios-detected` | Acer Predator Helios 300 G3-571 (DMI product `Predator G3-571` + GTX 1060 Mobile `10de:1c20` with Acer subsystem `1025:118b`): the machine profile below applies |
+| `helios-release`, `helios-kexts` | the pinned [macos_helios300](https://github.com/akshaynexus/macos_helios300) release manifest (SHA-256 pinned, every file checked): PG106, PG106FB, NMHDA, QCARomePatchRAM, Ath10kMac, AirportAth10k and two SSDTs, in the manifest's Kernel > Add / ACPI > Add order |
+| `helios-keep-devices` | the GTX 1060, its HDMI audio, the QCA6174 Wi-Fi and the Bluetooth are not disabled (no `disable-gpu`, no _OFF SSDT), because the release drives them |
+| `helios-device-properties`, `helios-nvram` | `hda-gfx` = `onboard-2` on the GPU and its HDMI audio; the two BlueToolFixup NVRAM keys |
+| `helios-forbidden` | never for this machine: the Turing+ NVRM / NVRMFB / NVAccel / NVRMAGDC kexts, `-wegnoegpu`, `disable-gpu` on the GPU, the GPU-off SSDT |
+| `helios-post-install` | PG106Accel, the Metal plugin, the shader translator and NVK go on the stick in `EFI/Helios300` with a README; OpenCore cannot inject them |
+| `helios-oclp-post-install`, `helios-usb-map`, `helios-cpufriend`, `helios-release-pending` | build-result notes: OCLP root patches after install (AppleHDA, HD 630), the USB map, CPUFriend only if the SMBIOS is not MacBookPro14,3, and no release pinned yet |
+
+## Acer Predator Helios 300 G3-571 (`p1401/helios300.py`)
+
+The Helios's GTX 1060 Mobile (Pascal), QCA6174 Wi-Fi and Bluetooth have no driver in the engine or in the NullMoth
+driver (Turing and newer). Their drivers come from the owner's
+[macos_helios300](https://github.com/akshaynexus/macos_helios300) releases, and 1401 builds the laptop's macOS 26 EFI
+from that release's `manifest.json` ([contract](https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md)):
+
+- **The manifest is pinned** by tag and SHA-256 in `p1401/helios300_release.json`. Every file is checked against the
+  manifest, and every file inside a zipped bundle too, before it goes into the EFI. Files are cached next to the
+  engine's own download cache (`helios300-release/<tag>/`), so a rebuild works offline. A release that fails a check
+  stops the build. Until the first release is published, the pin is empty: the Helios builds on its HD 630 with the
+  laptop basics, and the build result says the GPU, Wi-Fi and Bluetooth drivers were not added.
+- **macOS 26 only** (the release's MinKernel 25.0.0). A macOS 15 build gets the laptop basics without the release.
+- **Laptop basics** on top of what OpCore-Simplify picks (VirtualSMC + SMCBatteryManager + SMCProcessor, ECEnabler,
+  WhateverGreen with the Kaby Lake laptop platform-id `0x591B0000`, RealtekRTL8111, USBToolBox, BrightnessKeys,
+  RestrictEvents, Lilu; SSDT-EC/USBX/PLUG/PNLF/XOSI/GPI0): AppleALC with **layout-id 29** (AppleALC's own ALC255
+  layout "dhinakg - Realtek ALC255 for Acer Predator G3-571") instead of VoodooHDA, because NMHDA's HDMI audio
+  goes through AppleALC; VoodooPS2Controller, VoodooI2C + VoodooI2CHID (SYNA7DB5 touchpad), RealtekCardReader +
+  RealtekCardReaderFriend for the RTL8411B, and BlueToolFixup (BrcmPatchRAM ≥ 2.7.2) for QCARomePatchRAM. A Linux
+  scan names input devices by `Device ID`, which the engine does not read, so it misses the input kexts otherwise.
+- **SMBIOS MacBookPro14,3**, the engine's pick: the 2017 15-inch with the same i7-7700HQ and HD 630, so no CPUFriend
+  data is needed. RestrictEvents' `revpatch=sbvmm` (`tahoe-sbvmm`) lets it run macOS 26.
+- **After installing macOS 26**: OpenCore Legacy Patcher root patches for AppleHDA (removed in macOS 26; AppleALC and
+  NMHDA need it) and the Kaby Lake graphics of the HD 630 (macos_helios300 `docs/HARDWARE.md`). The build lowers
+  SIP for them, and the result lists the step. Then install `EFI/Helios300` from the stick (README there).
+- The stick is written by the usual writer (`p1401.usbwriter write`); the post-install kit is part of the EFI it copies.
+
+To test a release before it is published: `A1401_HELIOS_MANIFEST=<macos_helios300>/dist/manifest.json python3 -m p1401
+build ...`. A local manifest (even a `--dry-run` one) is used as is and recorded as *LOCAL, UNPINNED* in the build result.
 
 ## Tests
 
 ```bash
 python3 tests/corpus/fetch.py          # public Hardware Sniffer reports, pinned by commit
 python3 tests/run_corpus.py build      # build + rules + ocvalidate for every machine in the corpus
+python3 -m unittest tests.test_helios300   # Helios profile; A1401_HELIOS_ACPI=<ACPI dump> adds the full build + ocvalidate
 python3 -m p1401.selftest && python3 -m p1401.guide --selftest && python3 -m p1401.apple --selftest \
   && python3 -m p1401.usbwriter --selftest && python3 -m p1401.scan --selftest && python3 -m p1401.nullmoth --selftest
 ```

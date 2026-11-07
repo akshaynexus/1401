@@ -41,6 +41,9 @@ A folder from an earlier build is cleared first (read-only flags included).
   screen, which only survives macOS's PCI setup with a small BAR.
 - **Core Ultra 200 (Arrow Lake)**: keeps OpenCore-Simplify's CPU spoof (macOS 15 does not know the CPU) and turns off
   CpuTopologyRebuild and `ctrsmt`.
+- **Acer Predator Helios 300 G3-571** (`p1401/helios300.py`): its GTX 1060 (Pascal), QCA6174 Wi-Fi and Bluetooth
+  drivers come from the pinned macos_helios300 release manifest, applied in the manifest's order with every file
+  checked by SHA-256. The NullMoth (Turing+) rules do not apply to it.
 - **Boot arguments are never deleted from NVRAM**, so booting the stick on a PC that already runs macOS leaves that
   system's boot arguments alone.
 

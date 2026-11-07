@@ -126,6 +126,18 @@ python3 -m unittest tests.test_linux_gui
 
 On a machine with no display, run these under `gtk4-broadwayd :5 &` with `GDK_BACKEND=broadway BROADWAY_DISPLAY=:5`.
 
+## Acer Predator Helios 300 G3-571
+
+Run on the Helios, 1401 recognises it from the scan (DMI product `Predator G3-571` and the GTX 1060 Mobile with
+Acer's subsystem `1025:118b`). Its macOS 26 build then takes the GPU, Wi-Fi, Bluetooth and HDMI-audio drivers from
+the pinned [macos_helios300](https://github.com/akshaynexus/macos_helios300) release (README, "Acer Predator Helios
+300 G3-571"). Pick **macOS 26 Tahoe**: the release is built for it only. The stick is written the usual way; the
+drivers macOS has to install itself (PG106Accel, the Metal plugin, NVK) are on it in `EFI/Helios300` with a README.
+
+The profile was made from 1401's own Linux scan of the owner's laptop (`tests/fixtures/helios300/Report.json`, IDs
+only; the laptop's ACPI tables are Acer firmware and stay out of git). With a copy of those tables,
+`A1401_HELIOS_ACPI=<dir> python3 -m unittest tests.test_helios300` runs the full build and OpenCore's validator on it.
+
 ## How the Linux version differs from Windows
 
 - **Root**: 1401 asks for the password through `pkexec` for the scan and the write. On Windows the whole app runs as
