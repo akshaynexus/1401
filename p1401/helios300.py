@@ -5,7 +5,10 @@ GP106M 10de:1c20), PG106FB (its HDMI port), NMHDA (HDMI audio), QCARomePatchRAM 
 Ath10kMac + AirportAth10k (QCA6174 Wi-Fi 168c:003e, Acer board 11ad:0807), two SSDTs, and the post-install pieces
 (PG106Accel, the Metal plugin, NVK). Each release publishes manifest.json (macos_helios300 docs/MANIFEST.md): every
 file's SHA-256 and URL, the OpenCore Kernel > Add order and Min/MaxKernel, ACPI adds, DeviceProperties, NVRAM, and what
-must NOT be in the config. 1401 pins that manifest by its own SHA-256 (helios300_release.json) and applies it literally.
+must NOT be in the config. 1401 builds none of it: it downloads the release (the tag pinned with its manifest SHA-256 in
+helios300_release.json, else the latest release), checks every file against the manifest and applies it literally. A
+local release (--release-dir / --manifest) is used the same way, and --build-from-source only runs macos_helios300's
+own tools/release.sh to make one (build_from_source).
 
 The pass, from engine.build:
 1. detect(): the scan shows this laptop (DMI product "Predator G3-571" and the GTX 1060 with Acer's subsystem 1025:118b).
@@ -167,43 +170,103 @@ def check_manifest(m, local=False):
     return m
 
 
-def load_release(fetch=None, cache_dir=None, env=None):
-    """(Release or None, why-not). fetch(url) -> bytes, or None offline (then only the cache is used).
-    A local manifest named by $A1401_HELIOS_MANIFEST wins and is reported as unpinned."""
-    env = os.environ if env is None else env
-    local = env.get(ENV_MANIFEST)
-    if local:
-        base = os.path.dirname(os.path.abspath(local))
-        try:
-            with open(local, "rb") as fh:
-                raw_local = fh.read()
-            m = check_manifest(json.loads(raw_local.decode("utf-8")), local=True)
-        except (OSError, ValueError) as e:
-            raise ReleaseError(f"{ENV_MANIFEST}={local} could not be read: {e}") from e
+API_RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
+SOURCE_REPO = f"https://github.com/{REPO}.git"
+TOOLCHAIN_HELP = (f"https://github.com/{REPO}/blob/main/docs/MANIFEST.md#how-a-release-is-built "
+                  "(toolchain: macOS 26.5 SDK, Apple ld64 from cctools-port, ld64.lld, xnu-12377 export lists, rustup "
+                  "x86_64-apple-darwin, iasl, rcodesign; defaults in tools/cross-build-kext.sh)")
 
-        def read_local(art):
+
+def _vkey(tag):
+    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(-.*)?", str(tag or ""))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) is None) if m else (-1, -1, -1, False)
+
+
+def resolve_latest(fetch):
+    """The newest published macos_helios300 release (pre-releases count: every release is one until a Mac
+    verification build) that carries a manifest.json, or None when there is none yet."""
+    rels = json.loads(fetch(API_RELEASES).decode("utf-8"))
+    for r in rels if isinstance(rels, list) else []:
+        if r.get("draft"):
+            continue
+        if any(a.get("name") == "manifest.json" for a in r.get("assets") or []):
+            return r.get("tag_name")
+    return None
+
+
+def _cached_tags(cache_dir):
+    try:
+        tags = [t for t in os.listdir(cache_dir) if os.path.isfile(os.path.join(cache_dir, t, "manifest.json"))]
+    except OSError:
+        return []
+    return sorted(tags, key=_vkey, reverse=True)
+
+
+def _local_release(path):
+    path = os.path.abspath(path)
+    if os.path.isdir(path):
+        path = os.path.join(path, "manifest.json")
+    base = os.path.dirname(path)
+    try:
+        with open(path, "rb") as fh:
+            raw_local = fh.read()
+        m = check_manifest(json.loads(raw_local.decode("utf-8")), local=True)
+    except (OSError, ValueError) as e:
+        raise ReleaseError(f"the local macos_helios300 manifest {path} could not be read: {e}") from e
+
+    def read_local(art):
+        try:
             with open(os.path.join(base, art["file"]), "rb") as fh:
                 return fh.read()
-        return Release(m, {"kind": "local", "path": os.path.abspath(local), "pinned": False,
-                           "dry_run": bool(m["release"].get("dry_run")),
-                           "manifest_sha256": _sha(raw_local)}, read_local), None
+        except OSError as e:
+            raise ReleaseError(f"{art['file']} is not next to {path}") from e
+    return Release(m, {"kind": "local", "path": path, "pinned": False, "dry_run": bool(m["release"].get("dry_run")),
+                       "manifest_sha256": _sha(raw_local)}, read_local)
+
+
+def load_release(fetch=None, cache_dir=None, env=None, release=None, manifest=None):
+    """(Release or None, why-not). Nothing is built here: a release is downloaded (or read from the cache or a local
+    directory), its manifest checked, and every file checked against the manifest when it is used.
+
+    manifest: a local manifest.json or a release directory (--manifest / --release-dir / --build-from-source); it wins
+    and is reported as unpinned. $A1401_HELIOS_MANIFEST does the same.
+    release: a tag ("v0.1.0") or "latest"; default: the tag pinned in helios300_release.json, else the latest release.
+    fetch(url) -> bytes, or None offline: then only the cache (helios300-release/<tag>/) is used."""
+    env = os.environ if env is None else env
+    local = manifest or env.get(ENV_MANIFEST)
+    if local:
+        return _local_release(local), None
     p = pin()
-    tag, want = p.get("tag"), p.get("manifest_sha256")
-    if not tag or not want:
-        return None, "no macos_helios300 release is pinned in this 1401 yet (helios300_release.json)"
+    tag = release or p.get("tag") or "latest"
+    want = p.get("manifest_sha256") if p.get("tag") and tag == p.get("tag") else None
+    if tag == "latest":
+        found, why = None, "no macos_helios300 release has been published yet"
+        if fetch is not None:
+            try:
+                found = resolve_latest(fetch)
+            except Exception as e:  # noqa: BLE001 - offline or GitHub refused: the cache may still have one
+                why = f"the macos_helios300 releases could not be listed ({type(e).__name__}: {e})"
+        else:
+            why = "the network is not used (planning only) and no release is cached"
+        cached = _cached_tags(cache_dir) if cache_dir else []
+        tag = found or (cached[0] if cached else None)
+        if not tag:
+            return None, why
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?", tag):
+        raise ReleaseError(f"{tag!r} is not a macos_helios300 release tag (vX.Y.Z)")
     url = f"{URL_PREFIX}{tag}/manifest.json"
     cdir = os.path.join(cache_dir, tag) if cache_dir else None
     raw = None
     if cdir and os.path.isfile(os.path.join(cdir, "manifest.json")):
         with open(os.path.join(cdir, "manifest.json"), "rb") as fh:
             raw = fh.read()
-        if _sha(raw) != want:
+        if want and _sha(raw) != want:
             raw = None
     if raw is None:
         if fetch is None:
             return None, f"macos_helios300 {tag} is not in the cache and the network is not used (planning only)"
         raw = fetch(url)
-        if _sha(raw) != want:
+        if want and _sha(raw) != want:
             raise ReleaseError(f"{url} does not match the SHA-256 this 1401 pins for macos_helios300 {tag}")
         if cdir:
             os.makedirs(cdir, exist_ok=True)
@@ -212,9 +275,9 @@ def load_release(fetch=None, cache_dir=None, env=None):
             os.replace(os.path.join(cdir, "manifest.json.part"), os.path.join(cdir, "manifest.json"))
     m = check_manifest(json.loads(raw.decode("utf-8")))
     if "v" + m["release"]["version"] != tag:
-        raise ReleaseError(f"the pinned manifest is for v{m['release']['version']}, not {tag}")
+        raise ReleaseError(f"the {tag} manifest says v{m['release']['version']}")
 
-    def read_pinned(art):
+    def read_release(art):
         path = os.path.join(cdir, art["file"]) if cdir else None
         if path and os.path.isfile(path):
             with open(path, "rb") as fh:
@@ -229,7 +292,63 @@ def load_release(fetch=None, cache_dir=None, env=None):
                 fh.write(data)
             os.replace(path + ".part", path)
         return data
-    return Release(m, {"kind": "pinned", "tag": tag, "url": url, "pinned": True, "manifest_sha256": want}, read_pinned), None
+    return Release(m, {"kind": "release", "tag": tag, "url": url, "pinned": bool(want), "manifest_sha256": _sha(raw)},
+                   read_release), None
+
+
+def build_from_source(ref, work_dir, run=None, env=None):
+    """Optional: build the release locally with macos_helios300's OWN tools/release.sh and return its
+    dist/manifest.json, which then goes through exactly the same checks and assembly as a downloaded release.
+    1401 builds nothing itself: it clones (or reuses) the repo at ref, initialises its submodules and runs release.sh.
+    A missing cross toolchain (release.sh exit 77) stops with a pointer to macos_helios300's build docs."""
+    import subprocess  # noqa: PLC0415
+    run = run or subprocess.run
+    env = dict(os.environ if env is None else env)
+    ref = ref or "main"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}", ref) or ".." in ref:
+        raise ReleaseError(f"{ref!r} is not a git tag, branch or commit")
+    src = os.path.join(work_dir, "macos_helios300")
+    log = os.path.join(work_dir, "release.log")
+    os.makedirs(work_dir, exist_ok=True)
+
+    def git(*args, cwd=src):
+        r = run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise ReleaseError(f"git {' '.join(args)} failed: {(r.stderr or r.stdout or '').strip()[-400:]}")
+        return (r.stdout or "").strip()
+    if not os.path.isdir(os.path.join(src, ".git")):
+        git("clone", "--quiet", SOURCE_REPO, src, cwd=work_dir)
+    git("fetch", "--quiet", "--tags", "origin")
+    target = ref                                   # a tag or a commit
+    if not re.fullmatch(r"[0-9a-f]{7,40}", ref) and git("ls-remote", "--heads", "origin", ref):
+        target = f"origin/{ref}"                   # a branch: its current tip on GitHub
+    git("checkout", "--quiet", "--detach", target)
+    git("submodule", "update", "--init", "--quiet")
+    commit = git("rev-parse", "HEAD")
+    m = re.fullmatch(r"v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)", ref)
+    version = m.group(1) if m else f"0.0.0-src.{commit[:12]}"
+    dist = os.path.join(work_dir, "dist")
+    cmd = ["bash", os.path.join(src, "tools", "release.sh"), "--version", version, "--dist", dist]
+    if env.get("HELIOS_IAF2"):
+        cmd += ["--iaf2", env["HELIOS_IAF2"]]
+    print(f"macos_helios300 {ref} ({commit[:12]}): running its tools/release.sh (this takes a while; log: {log})", flush=True)
+    with open(log, "w", encoding="utf-8") as fh:
+        r = run(cmd, cwd=src, stdout=fh, stderr=subprocess.STDOUT, env=env)
+    if r.returncode == 77:
+        raise ReleaseError("building macos_helios300 from source needs its Linux cross toolchain, and part of it is "
+                           f"missing (release.sh said SKIP; {log}). Set it up as {TOOLCHAIN_HELP}, or build without "
+                           "--build-from-source to use the published release.")
+    if r.returncode != 0:
+        try:
+            with open(log, encoding="utf-8", errors="replace") as fh:
+                tail = fh.read()[-1500:]
+        except OSError:
+            tail = ""
+        raise ReleaseError(f"macos_helios300's tools/release.sh failed (exit {r.returncode}); see {log}:\n{tail}")
+    manifest = os.path.join(dist, "manifest.json")
+    if not os.path.isfile(manifest):
+        raise ReleaseError(f"tools/release.sh finished but wrote no {manifest}")
+    return manifest
 
 
 # ---- engine hooks ---------------------------------------------------------------------------------------------------
@@ -384,8 +503,10 @@ def apply(config_path, release, macos_version, hardware, change):
         cfg = plistlib.load(fh)
     m = release.manifest
     src = release.source
-    change("helios-release", "", f"macos_helios300 {release.version} ({'pinned manifest ' + src['manifest_sha256'][:16] if src['pinned'] else 'LOCAL, UNPINNED: ' + src['path']}"
-           + (", DRY RUN" if src.get("dry_run") else "") + ")",
+    how = (f"pinned manifest {src['manifest_sha256'][:16]}" if src["pinned"] else
+           f"release {src['tag']}, manifest {src['manifest_sha256'][:16]} not pinned in this 1401" if src["kind"] == "release" else
+           f"LOCAL, UNPINNED: {src['path']}")
+    change("helios-release", "", f"macos_helios300 {release.version} ({how}" + (", DRY RUN" if src.get("dry_run") else "") + ")",
            "the drivers for this laptop's GTX 1060, Wi-Fi, Bluetooth and HDMI audio come from its own release, checked file by file")
     if not release.covers(macos_version):
         change("helios-macos-range", "", f"not added: the release covers Darwin {m['macos']['min_kernel']}-{m['macos']['max_kernel']}",
