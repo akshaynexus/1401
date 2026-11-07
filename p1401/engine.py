@@ -205,6 +205,12 @@ class Policy:
     # through testers before it becomes the default. On, the guard boards keep iMessage, Apple ID and the startup-disk
     # choice across reboots instead of losing every NVRAM write.
     persistent_nvram_amd: bool = False
+    # Acer Predator Helios 300 G3-571 (helios300.py). Default: the macos_helios300 release pinned in
+    # helios300_release.json, else its latest release, downloaded and checked file by file. 1401 builds nothing for it.
+    helios_release: str = ""             # "vX.Y.Z" or "latest" instead of the pinned release
+    helios_manifest: str = ""            # a local release (manifest.json or its directory): offline / before publishing
+    helios_build_from_source: bool = False   # opt-in: run macos_helios300's own tools/release.sh, then use its dist/
+    helios_ref: str = ""                 # tag, branch or commit for helios_build_from_source (default main)
 
 
 @dataclass
@@ -927,9 +933,16 @@ def build(report_path, acpi_dir, out_dir, policy=None, echo=False, download=True
             _use_ock_cache(o)
             if helios_hit:
                 try:
+                    helios_cache = os.path.join(os.path.dirname(OCK_CACHE), "helios300-release")
+                    helios_manifest = policy.helios_manifest or None
+                    if policy.helios_build_from_source and not helios_manifest:
+                        if download:   # macos_helios300 builds it with its own release.sh; 1401 only assembles
+                            helios_manifest = helios300.build_from_source(policy.helios_ref, os.path.join(helios_cache, "source"))
+                        else:
+                            h.notices.append("macos_helios300: --build-from-source runs only with build, not plan")
                     helios_rel, helios_why = helios300.load_release(
                         (lambda url: downloads.make_request(o.o.fetcher, url).read()) if download else None,
-                        os.path.join(os.path.dirname(OCK_CACHE), "helios300-release"))
+                        helios_cache, release=policy.helios_release or None, manifest=helios_manifest)
                 except helios300.ReleaseError as e:
                     raise RuntimeError(f"The macos_helios300 release for this laptop failed its checks, so nothing was built: {e}") from e
                 h.notices.append(f"macos_helios300 {helios_rel.version} ({helios_rel.source['kind']})" if helios_rel else
