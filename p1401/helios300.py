@@ -63,6 +63,7 @@ HDMI_CODEC = "10DE-0084"                  # the GP106's HDMI codec (Sound sectio
 # None of AppleALC's other Acer ALC255 entries is a Predator G3. The headset mic on the combo jack is unverified
 # (macos_helios300 docs/HARDWARE.md "Headset microphone").
 LAYOUT_ID = "29"
+APP_NAME = "Helios 300 Setup.app"   # macos_helios300 apps/HeliosSetup: the post-install app, extracted into EFI/Helios300
 # Kexts the release replaces or must never meet (also in the manifest's forbidden list): the NullMoth Turing+ stack,
 # and Bluetooth/Wi-Fi drivers for other chips the engine may pick.
 NEVER = ("NVRM.kext", "NVRMFB.kext", "NVAccel.kext", "NVRMAGDC.kext")
@@ -130,8 +131,9 @@ def _sha(blob):
 class Release:
     """A checked manifest plus where its files come from. files(name) -> bytes, each checked against the manifest."""
 
-    def __init__(self, manifest, source, read):
+    def __init__(self, manifest, source, read, raw=None):
         self.manifest, self.source, self._read = manifest, source, read
+        self.raw = raw   # the manifest.json bytes as published (the stick gets these, so their SHA-256 stays the release's)
 
     @property
     def version(self):
@@ -235,7 +237,7 @@ def _local_release(path):
         except OSError as e:
             raise ReleaseError(f"{art['file']} is not next to {path}") from e
     return Release(m, {"kind": "local", "path": path, "pinned": False, "dry_run": bool(m["release"].get("dry_run")),
-                       "manifest_sha256": _sha(raw_local)}, read_local)
+                       "manifest_sha256": _sha(raw_local)}, read_local, raw=raw_local)
 
 
 def load_release(fetch=None, cache_dir=None, env=None, release=None, manifest=None):
@@ -307,7 +309,7 @@ def load_release(fetch=None, cache_dir=None, env=None, release=None, manifest=No
             os.replace(path + ".part", path)
         return data
     return Release(m, {"kind": "release", "tag": tag, "url": url, "pinned": bool(want), "manifest_sha256": _sha(raw)},
-                   read_release), None
+                   read_release, raw=raw), None
 
 
 def build_from_source(ref, work_dir, run=None, env=None):
@@ -502,7 +504,7 @@ def _entry_like(existing, values):
 POST_README = """macos_helios300 {version} post-install kit for the {name}
 =====================================================================
 
-These were built by macos_helios300 tools/release.sh and checked by 1401 against the release manifest
+{app}These were built by macos_helios300 tools/release.sh and checked by 1401 against the release manifest
 (SHA-256 of every file). OpenCore cannot inject them; install them after macOS 26 is running.
 Mount the stick's EFI partition (sudo diskutil mount <disk>s1) or copy this folder to your home folder, open
 Terminal in it and run the scripts with bash as your own user: they ask for sudo themselves. MODE=dry-run
@@ -534,9 +536,27 @@ https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md
 """
 
 
+APP_README = """Open Helios 300 Setup.app after installing macOS: it runs the steps below for you, in order, each with its dry
+run first and one driver change per restart, shows what is installed and working, and keeps the release up to
+date. Mount the stick's EFI partition (sudo diskutil mount <disk>s1), open EFI/Helios300 and double-click it; let
+it copy itself to Applications, so it can continue after each restart. The scripts below are the same steps for
+Terminal.
+
+"""
+
+
+def _is_app(a):
+    """The post-install app: extracted on the stick (a zip cannot be opened from Finder in one step)."""
+    return a.get("kind") == "app" and a.get("install") == "applications"
+
+
+def _kit_name(a):
+    return a["name"] + "/" if _is_app(a) else a["file"]
+
+
 def _kit_files(arts):
     """Every file put in EFI/Helios300, with what the manifest says it is (its status up to the first '; ')."""
-    rows = [f"  {a['file']:<34} {a.get('kind') or '?'}: {str(a.get('status') or '').split('; ')[0]}" for a in arts]
+    rows = [f"  {_kit_name(a):<34} {a.get('kind') or '?'}: {str(a.get('status') or '').split('; ')[0]}" for a in arts]
     rows.append(f"  {'manifest.json':<34} the release manifest: SHA-256, source, licence and status of every file")
     rows.append(f"  {'README.txt':<34} this file (written by 1401)")
     return "\n".join(rows)
@@ -565,6 +585,13 @@ def _post_steps(manifest, shipped):
                     out.append(f"    {k + ':':<8} {run[k]}")
         elif script:
             out.append(f"    {script} is not in this release: do it by hand as described ({', '.join(st['artifacts'])})")
+        elif run and APP_NAME in shipped:
+            out.append(f"    {APP_NAME} does this step; the same in Terminal"
+                       + (f" (helios-setup is \"{APP_NAME}/Contents/MacOS/helios-setup\")" if any(v.startswith("helios-setup ") for v in run.values()) else "")
+                       + ":")
+            for k in ("check", "install", "revert", "status"):
+                if run.get(k):
+                    out.append(f"    {k + ':':<8} {run[k]}")
         else:
             out.append(f"    files: {', '.join(st['artifacts'])}")
         if st.get("needs"):
@@ -778,17 +805,25 @@ def apply(config_path, release, macos_version, hardware, change):
         if a.get("install") == "opencore" or not fits(a):
             continue
         os.makedirs(kit, exist_ok=True)
-        with open(os.path.join(kit, a["file"]), "wb") as fh:
-            fh.write(release.blob(a))
-        post.append(a["file"])
+        if _is_app(a):
+            _extract_bundle(release, a, kit)   # every file checked against contents_sha256
+        else:
+            with open(os.path.join(kit, a["file"]), "wb") as fh:
+                fh.write(release.blob(a))
+        post.append(_kit_name(a))
         shipped.add(a["name"])
         kit_arts.append(a)
     if post:
-        with open(os.path.join(kit, "manifest.json"), "w", encoding="utf-8") as fh:
-            json.dump(m, fh, indent=1)
+        if release.raw is not None:   # the published bytes: the app and install-gpu.sh see the release's SHA-256
+            with open(os.path.join(kit, "manifest.json"), "wb") as fh:
+                fh.write(release.raw)
+        else:
+            with open(os.path.join(kit, "manifest.json"), "w", encoding="utf-8") as fh:
+                json.dump(m, fh, indent=1)
         with open(os.path.join(kit, "README.txt"), "w", encoding="utf-8") as fh:
             doc = next((a["file"] for a in kit_arts if a.get("kind") == "doc"), None)
-            fh.write(POST_README.format(version=release.version, name=NAME, steps=_post_steps(m, shipped), files=_kit_files(kit_arts),
+            fh.write(POST_README.format(app=APP_README if APP_NAME in shipped else "", version=release.version, name=NAME,
+                                        steps=_post_steps(m, shipped), files=_kit_files(kit_arts),
                                         doc=f"\n{doc}, from the release, has the same steps and commands as a formatted page." if doc else ""))
         change("helios-post-install", "", "EFI/Helios300: " + ", ".join(post),
                "PG106FB, PG106Accel, the Metal plugin, NVK and the audio scripts are installed from macOS itself; "
@@ -815,7 +850,9 @@ def notes(res, release, why_not, kept):
                     "the i7-7700HQ's power data is MacBookPro14,3's; another model's data runs it at the wrong frequencies"))
     if _darwin(res.macos_version) >= (25, 0, 0):
         out.append(("helios-oclp-post-install", "",
-                    "after installing, audio from EFI/Helios300: option 2 AppleHDA, recommended (audio-applehda.sh: "
+                    ("after installing, open Helios 300 Setup.app in EFI/Helios300 (it runs the post-install steps); then "
+                     if release is not None and release.artifact(APP_NAME) else "after installing, ")
+                    + "audio from EFI/Helios300: option 2 AppleHDA, recommended (audio-applehda.sh: "
                     "layout 29 + HDMI audio; FileVault off, run again after every macOS update), or option 1 VoodooHDA "
                     "as the fallback (audio-voodoohda.sh, no HDMI audio); never OCLP's Nvidia Web Drivers",
                     "macOS 26 removed AppleHDA (AppleALC/NMHDA need it) and OCLP's own patch set would replace PG106 with "

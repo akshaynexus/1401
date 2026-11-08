@@ -87,9 +87,35 @@ POST_011 = [
 ]
 
 
-def make_release(dry_run=False, tamper=None, v011=False):
+APP = "Helios 300 Setup.app"
+
+
+def _app(tamper_inner=False):
+    """Helios 300 Setup.app as make_manifest ships it: <name>.zip with spaces as '-', the bundle at its top."""
+    files = {"Contents/Info.plist": plistlib.dumps({"CFBundleIdentifier": "org.helios300.setup"}),
+             "Contents/MacOS/HeliosSetup": b"\xcf\xfa\xed\xfe" + b"app", "Contents/MacOS/helios-setup": b"\xcf\xfa\xed\xfe" + b"cli",
+             "Contents/Resources/install-gpu.sh": b"#!/bin/bash\n"}
+    data, contents = _zip_bundle(APP, files)
+    if tamper_inner:   # an extra file, with the zip's own hash recomputed: only contents_sha256 can catch it
+        data, _ = _zip_bundle(APP, dict(files, **{"Contents/MacOS/evil": b"x"}))
+    art = {"name": APP, "kind": "app", "bundle_id": "org.helios300.setup", "version": "0.1.0", "file": "Helios-300-Setup.app.zip",
+           "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "url": URL + "Helios-300-Setup.app.zip",
+           "contents_sha256": contents, "licence": "GPL-2.0-only", "status": "the post-install app; never run on macOS yet",
+           "install": "applications", "install_path": "/Applications/" + APP, "requires": [], "source": {"tree": "self", "path": "apps/HeliosSetup"},
+           "built_by": "cross", "signed": "ad-hoc (rcodesign)"}
+    return art, data
+
+
+OPENCORE_STEP = {"step": "opencore", "order": 0, "what": "Install OpenCore to this Mac", "artifacts": [APP],
+                 "run": {"check": "helios-setup efi check", "install": "helios-setup efi install",
+                         "revert": "helios-setup efi restore", "status": "helios-setup efi status"}, "reboot": True}
+
+
+def make_release(dry_run=False, tamper=None, v011=False, app=False, tamper_app=False):
     """A manifest + its files, as a dict {file: bytes}. v011: the 0.1.1 additions (post-install scripts and their
-    machine-readable steps, Ath10kMac's baked-in country, applbkl in the manifest's DeviceProperties)."""
+    machine-readable steps, Ath10kMac's baked-in country, applbkl in the manifest's DeviceProperties). app: Helios 300
+    Setup.app and the scriptless step it runs (implies v011)."""
+    v011 = v011 or app
     arts, blobs = [], {}
     for art, data in (
             _kext("PG106.kext", "PG106", 100, hardware=[GPU]),
@@ -118,6 +144,10 @@ def make_release(dry_run=False, tamper=None, v011=False):
                           status="the post-install steps in order")
         arts.append(art)
         blobs[art["file"]] = data
+    if app:
+        art, data = _app(tamper_inner=tamper_app)
+        arts.append(art)
+        blobs[art["file"]] = data
     if tamper:
         blobs[tamper] = blobs[tamper] + b"x"
     manifest = {
@@ -142,6 +172,8 @@ def make_release(dry_run=False, tamper=None, v011=False):
     if v011:
         manifest["post_install"] = copy.deepcopy(POST_011)
         manifest["config"]["device_properties"][helios300.IGPU_PATH] = {"applbkl": {"data": "01000000"}}
+    if app:
+        manifest["post_install"].insert(0, copy.deepcopy(OPENCORE_STEP))
     return manifest, blobs
 
 
@@ -504,6 +536,69 @@ class Release011(unittest.TestCase):
         _, _, root = run_apply(release_dir())
         with open(os.path.join(root, "EFI", "Helios300", "README.txt"), encoding="utf-8") as fh:
             self.assertIn("[pg106accel] PG106Accel to /Library/Extensions\n    files: PG106Accel.kext", fh.read())
+
+
+class SetupApp(unittest.TestCase):
+    """Helios 300 Setup.app (macos_helios300 apps/HeliosSetup) goes on the stick extracted, next to the payloads."""
+
+    def setUp(self):
+        self.manifest_path = release_dir(app=True)
+        self.cfg, self.changes, self.root = run_apply(self.manifest_path)
+        self.kit = os.path.join(self.root, "EFI", "Helios300")
+        with open(os.path.join(self.kit, "README.txt"), encoding="utf-8") as fh:
+            self.readme = fh.read()
+
+    def test_the_app_is_extracted_next_to_the_payloads(self):
+        exe = os.path.join(self.kit, APP, "Contents", "MacOS", "HeliosSetup")
+        self.assertTrue(os.path.isfile(exe))
+        self.assertTrue(os.access(exe, os.X_OK))
+        self.assertTrue(os.path.isfile(os.path.join(self.kit, APP, "Contents", "MacOS", "helios-setup")))
+        self.assertFalse(os.path.exists(os.path.join(self.kit, "Helios-300-Setup.app.zip")), "the app, not its zip")
+        for f in ("PG106Accel.kext.zip", "audio-applehda.sh", "manifest.json", "README.txt"):   # the payloads beside it
+            self.assertTrue(os.path.exists(os.path.join(self.kit, f)), f)
+
+    def test_readme_says_open_the_app_after_installing_macos(self):
+        self.assertTrue(self.readme.startswith("macos_helios300 0.1.0 post-install kit"))
+        self.assertIn("Open Helios 300 Setup.app after installing macOS", self.readme)
+        self.assertLess(self.readme.index("Open Helios 300 Setup.app"), self.readme.index("[opencore]"))
+        files = self.readme[self.readme.index("Files in this folder:"):]
+        self.assertRegex(files, r"\n  Helios 300 Setup\.app/ +app: the post-install app\n")
+        self.assertIn("audio-voodoohda.sh", files, "the scripts still ship, for Terminal")
+        rule = next(c for c in self.changes if c["rule"] == "helios-post-install")
+        self.assertIn("Helios 300 Setup.app/", rule["after"])
+
+    def test_scriptless_steps_show_their_commands(self):
+        oc = self.readme[self.readme.index("[opencore]"):self.readme.index("[gpu]")]
+        self.assertIn("Helios 300 Setup.app does this step", oc)
+        self.assertIn('helios-setup is "Helios 300 Setup.app/Contents/MacOS/helios-setup"', oc)
+        self.assertIn("install: helios-setup efi install", oc)
+        self.assertNotIn("files:", oc)
+
+    def test_the_kit_manifest_is_the_published_bytes(self):
+        with open(self.manifest_path, "rb") as fh:
+            published = fh.read()
+        with open(os.path.join(self.kit, "manifest.json"), "rb") as fh:
+            self.assertEqual(fh.read(), published, "the app and install-gpu.sh check the release's own manifest")
+
+    def test_a_tampered_app_is_refused(self):
+        with self.assertRaises(helios300.ReleaseError):
+            run_apply(release_dir(app=True, tamper_app=True))
+        with self.assertRaises(helios300.ReleaseError):
+            run_apply(release_dir(app=True, tamper="Helios-300-Setup.app.zip"))
+
+    def test_without_the_app_the_readme_is_the_scripts_one(self):
+        _, _, root = run_apply(release_dir(v011=True))
+        with open(os.path.join(root, "EFI", "Helios300", "README.txt"), encoding="utf-8") as fh:
+            self.assertNotIn("Open Helios 300 Setup.app", fh.read())
+
+    def test_build_result_names_the_app(self):
+        rel, _ = helios300.load_release(env={helios300.ENV_MANIFEST: self.manifest_path})
+        res = mock.Mock(smbios=helios300.SMBIOS_NATIVE, macos_version="25.6.0")
+        note = next(n for n in helios300.notes(res, rel, None, []) if n[0] == "helios-oclp-post-install")
+        self.assertIn("open Helios 300 Setup.app in EFI/Helios300", note[2])
+        rel_old, _ = helios300.load_release(env={helios300.ENV_MANIFEST: release_dir(v011=True)})
+        note = next(n for n in helios300.notes(res, rel_old, None, []) if n[0] == "helios-oclp-post-install")
+        self.assertNotIn("Helios 300 Setup.app", note[2])
 
 
 class KeepDevices(unittest.TestCase):
