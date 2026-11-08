@@ -11,6 +11,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import tempfile
 import unittest
 import zipfile
@@ -108,10 +109,15 @@ def make_release(dry_run=False, tamper=None, v011=False):
         blobs[art["file"]] = data
     if v011:
         next(a for a in arts if a["name"] == "Ath10kMac.kext")["personality"] = {"Ath10kCountryCode": {"string": "IN"}}
-        for name in ("audio-voodoohda.sh", "audio-applehda.sh"):
-            art, data = _file(name, "script", "stick-only", b"#!/bin/bash\n# " + name.encode() + b"\n", built_by="copy")
+        for name in ("audio-voodoohda.sh", "audio-applehda.sh", "gpu-apps.sh"):   # gpu-apps.sh: a script in no step
+            art, data = _file(name, "script", "stick-only", b"#!/bin/bash\n# " + name.encode() + b"\n", built_by="copy",
+                              status=f"{name} test script; second clause")
             arts.append(art)
             blobs[art["file"]] = data
+        art, data = _file("POST-INSTALL.md", "doc", "stick-only", b"# after macOS 26 is installed\n", built_by="generated",
+                          status="the post-install steps in order")
+        arts.append(art)
+        blobs[art["file"]] = data
     if tamper:
         blobs[tamper] = blobs[tamper] + b"x"
     manifest = {
@@ -422,8 +428,30 @@ class Release011(unittest.TestCase):
             self.readme = fh.read()
 
     def test_scripts_go_on_the_stick(self):
-        self.assertEqual(sorted(os.listdir(self.kit)), ["NVIDIA-firmware-LICENCE.txt", "PG106Accel.kext.zip", "README.txt",
-                                                        "audio-applehda.sh", "audio-voodoohda.sh", "manifest.json"])
+        self.assertEqual(sorted(os.listdir(self.kit)), ["NVIDIA-firmware-LICENCE.txt", "PG106Accel.kext.zip", "POST-INSTALL.md", "README.txt",
+                                                        "audio-applehda.sh", "audio-voodoohda.sh", "gpu-apps.sh", "manifest.json"])
+
+    def test_every_script_and_doc_artifact_is_copied_and_listed(self):
+        # every non-OpenCore artifact goes in the kit, scripts outside any post_install step and docs included, and
+        # the README names each file with what it is
+        with open(os.path.join(self.kit, "manifest.json"), encoding="utf-8") as fh:
+            m = json.load(fh)
+        files = self.readme[self.readme.index("Files in this folder:"):]
+        for a in m["artifacts"]:
+            if a["install"] == "opencore":
+                self.assertFalse(os.path.exists(os.path.join(self.kit, a["file"])), a["file"])
+                self.assertNotIn(a["file"], files)
+                continue
+            self.assertTrue(os.path.isfile(os.path.join(self.kit, a["file"])), a["file"])
+            self.assertRegex(files, r"\n  " + re.escape(a["file"]) + r" +" + re.escape(a["kind"]) + ": ")
+        self.assertIn("gpu-apps.sh                        script: gpu-apps.sh test script\n", files)
+        self.assertIn("POST-INSTALL.md                    doc: the post-install steps in order", files)
+        self.assertIn("POST-INSTALL.md, from the release, has the same steps", self.readme)
+        self.assertIn("manifest.json", files)
+
+    def test_option_2_removes_option_1_after_the_snapshot(self):
+        self.assertNotIn("removes option 1 first", self.readme)
+        self.assertIn("only once the new system snapshot is in place", self.readme)
 
     def test_readme_lists_the_steps_with_their_commands(self):
         self.assertIn("AUDIO: do ONE of these 2 options.", self.readme)

@@ -132,7 +132,7 @@ Run on the Helios, 1401 recognises it from the scan (DMI product `Predator G3-57
 Acer's subsystem `1025:118b`). Its macOS 26 build then takes the GPU, Wi-Fi, Bluetooth and HDMI-audio drivers from
 the published [macos_helios300](https://github.com/akshaynexus/macos_helios300) release, downloaded and checked file by file (README, "Acer Predator Helios
 300 G3-571"). Pick **macOS 26 Tahoe**: the release is built for it only. The stick is written the usual way; the
-drivers macOS has to install itself (PG106Accel, the Metal plugin, NVK) are on it in `EFI/Helios300` with a README.
+drivers macOS has to install itself (PG106FB, PG106Accel, the Metal plugin, NVK) and the scripts that install them are on it in `EFI/Helios300` with a README.
 
 The profile was made from 1401's own Linux scan of the owner's laptop (`tests/fixtures/helios300/Report.json`, IDs
 only; the laptop's ACPI tables are Acer firmware and stay out of git). With a copy of those tables,

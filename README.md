@@ -55,7 +55,7 @@ Every rule that fires is recorded in the build result.
 | `helios-keep-devices` | the GTX 1060, its HDMI audio, the QCA6174 Wi-Fi and the Bluetooth are not disabled (no `disable-gpu`, no _OFF SSDT), because the release drives them |
 | `helios-device-properties`, `helios-nvram` | `hda-gfx` = `onboard-2` on the GPU and its HDMI audio; the two BlueToolFixup NVRAM keys |
 | `helios-forbidden` | never for this machine: the Turing+ NVRM / NVRMFB / NVAccel / NVRMAGDC kexts, `-wegnoegpu`, `disable-gpu` on the GPU, the GPU-off SSDT |
-| `helios-post-install` | PG106Accel, the Metal plugin, the shader translator and NVK go on the stick in `EFI/Helios300` with a README; OpenCore cannot inject them |
+| `helios-post-install` | every non-OpenCore file of the release (PG106FB, PG106Accel, the Metal plugin, the shader translator, NVK, the post-install scripts, `POST-INSTALL.md`, the licences) goes on the stick in `EFI/Helios300` with a README of the steps, their commands and every file there; OpenCore cannot inject them |
 | `helios-oclp-post-install`, `helios-usb-map`, `helios-cpufriend`, `helios-release-pending` | build-result notes: OCLP root patches after install (AppleHDA, HD 630), the USB map, CPUFriend only if the SMBIOS is not MacBookPro14,3, and no release pinned yet |
 
 ## Acer Predator Helios 300 G3-571 (`p1401/helios300.py`)

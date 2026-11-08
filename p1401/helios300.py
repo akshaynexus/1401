@@ -506,16 +506,20 @@ These were built by macos_helios300 tools/release.sh and checked by 1401 against
 (SHA-256 of every file). OpenCore cannot inject them; install them after macOS 26 is running.
 Mount the stick's EFI partition (sudo diskutil mount <disk>s1) or copy this folder to your home folder, open
 Terminal in it and run the scripts with bash as your own user: they ask for sudo themselves. MODE=dry-run
-changes nothing and prints what MODE=install would do. Restart after every install or revert.
+changes nothing and prints what MODE=install would do. Restart after every install or revert.{doc}
 
 {steps}
+
+Files in this folder:
+{files}
 
 After installing macOS 26 (also listed in 1401's build result):
 - The HD 630 needs no patch: macOS 26.7.2 still ships the Kaby Lake drivers (Metal 3 on the first boot).
 - Audio: macOS 26 removed AppleHDA. Pick ONE of the two options above:
   option 2 (recommended), AppleHDA (audio-applehda.sh): AppleHDA back on the system volume, as OpenCore Legacy
     Patcher's "Modern Audio" does; AppleALC layout 29 with Apple's speaker EQ, and with NMHDA HDMI audio too.
-    It removes option 1 first. FileVault must be OFF. A macOS update removes it: run it again after every update.
+    It removes option 1 itself, only once the new system snapshot is in place (a stop before that leaves the
+    audio as it was). FileVault must be OFF. A macOS update removes it: run it again after every update.
   option 1 (fallback), VoodooHDA (audio-voodoohda.sh): a kext in /Library/Extensions, nothing on the system volume,
     reversible, survives macOS updates; speakers, headphones and microphones, but it sounds worse and has NO HDMI
     audio.
@@ -528,6 +532,14 @@ After installing macOS 26 (also listed in 1401's build result):
 Sources, licences and status of every file: manifest.json next to this README, and
 https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md
 """
+
+
+def _kit_files(arts):
+    """Every file put in EFI/Helios300, with what the manifest says it is (its status up to the first '; ')."""
+    rows = [f"  {a['file']:<34} {a.get('kind') or '?'}: {str(a.get('status') or '').split('; ')[0]}" for a in arts]
+    rows.append(f"  {'manifest.json':<34} the release manifest: SHA-256, source, licence and status of every file")
+    rows.append(f"  {'README.txt':<34} this file (written by 1401)")
+    return "\n".join(rows)
 
 
 def _post_steps(manifest, shipped):
@@ -761,8 +773,8 @@ def apply(config_path, release, macos_version, hardware, change):
     # Post-install pieces (OpenCore cannot inject them) + licences, on the stick under EFI/Helios300.
     kit = os.path.join(efi, "Helios300")
     shutil.rmtree(kit, ignore_errors=True)
-    post, shipped = [], set()
-    for a in m["artifacts"]:
+    post, shipped, kit_arts = [], set(), []
+    for a in m["artifacts"]:   # every non-OpenCore artifact: bundles, scripts, docs, licences
         if a.get("install") == "opencore" or not fits(a):
             continue
         os.makedirs(kit, exist_ok=True)
@@ -770,11 +782,14 @@ def apply(config_path, release, macos_version, hardware, change):
             fh.write(release.blob(a))
         post.append(a["file"])
         shipped.add(a["name"])
+        kit_arts.append(a)
     if post:
         with open(os.path.join(kit, "manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(m, fh, indent=1)
         with open(os.path.join(kit, "README.txt"), "w", encoding="utf-8") as fh:
-            fh.write(POST_README.format(version=release.version, name=NAME, steps=_post_steps(m, shipped)))
+            doc = next((a["file"] for a in kit_arts if a.get("kind") == "doc"), None)
+            fh.write(POST_README.format(version=release.version, name=NAME, steps=_post_steps(m, shipped), files=_kit_files(kit_arts),
+                                        doc=f"\n{doc}, from the release, has the same steps and commands as a formatted page." if doc else ""))
         change("helios-post-install", "", "EFI/Helios300: " + ", ".join(post),
                "PG106FB, PG106Accel, the Metal plugin, NVK and the audio scripts are installed from macOS itself; "
                "they go on the stick with a README of the steps")
