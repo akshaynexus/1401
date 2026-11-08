@@ -486,8 +486,10 @@ These were built by macos_helios300 tools/release.sh and checked by 1401 against
 {steps}
 
 After installing macOS 26 (also listed in 1401's build result):
-- OpenCore Legacy Patcher root patches: AppleHDA (macOS 26 removed it; AppleALC and NMHDA need it) and the
-  Kaby Lake graphics patch for the HD 630 (macos_helios300 docs/HARDWARE.md). SIP is already lowered for them.
+- The HD 630 needs no patch: macOS 26.7.2 still ships the Kaby Lake drivers (Metal 3 on the first boot).
+- Audio: macOS 26 removed AppleHDA (AppleALC and NMHDA need it). Do NOT let OpenCore Legacy Patcher apply its
+  "Nvidia Web Drivers" set: they would take the GTX 1060 from PG106. OCLP refuses to patch while it lists them;
+  macos_helios300 docs/HARDWARE.md has the audio-only route. SIP is already lowered.
 - USB: SSDT-HS07-UPC marks the Bluetooth port internal; map the other ports with USBToolBox for USB 3 speeds.
 
 Sources, licences and status of every file: manifest.json next to this README, and
@@ -582,6 +584,18 @@ def apply(config_path, release, macos_version, hardware, change):
                 change("helios-device-properties", f"{path} {k}={d.get(k)!r}", f"{k}={val!r}",
                        "the GP106 and its HDMI audio share hda-gfx onboard-2 (WhateverGreen gives the HD 630 onboard-1)")
                 d[k] = val
+    # Boot hotkeys in the OpenCore picker: Shift+Enter starts macOS safe mode (-x), Cmd+V verbose. The Helios kexts
+    # (PG106, PG106FB, Ath10kMac, AirportAth10k, QCARomePatchRAM) stand down under -x, so a bad driver build can be
+    # bypassed from the picker without Recovery or the USB stick (first macOS boots, 2026-11-08).
+    boot = cfg.setdefault("Misc", {}).setdefault("Boot", {})
+    if boot.get("PollAppleHotKeys") is not True:
+        change("helios-hotkeys", f"PollAppleHotKeys {boot.get('PollAppleHotKeys')}", "PollAppleHotKeys True",
+               "Shift+Enter = safe mode (the Helios kexts stand down), Cmd+V = verbose, from the OpenCore picker")
+        boot["PollAppleHotKeys"] = True
+    inp = cfg.setdefault("UEFI", {}).setdefault("Input", {})
+    if inp.get("KeySupport") is not True:
+        change("helios-hotkeys", f"KeySupport {inp.get('KeySupport')}", "KeySupport True", "the picker hotkeys need it")
+        inp["KeySupport"] = True
     nv_add = cfg.setdefault("NVRAM", {}).setdefault("Add", {})
     nv_del = cfg["NVRAM"].setdefault("Delete", {})
     for guid, keys in c.get("nvram_add", {}).items():
@@ -665,8 +679,8 @@ def notes(res, release, why_not, kept):
         out.append(("helios-cpufriend", "", f"SMBIOS {res.smbios}: add CPUFriend + CPUFriendDataProvider made from {SMBIOS_NATIVE}",
                     "the i7-7700HQ's power data is MacBookPro14,3's; another model's data runs it at the wrong frequencies"))
     if _darwin(res.macos_version) >= (25, 0, 0):
-        out.append(("helios-oclp-post-install", "", "after installing: OCLP root patches for AppleHDA and the Kaby Lake HD 630",
-                    "macOS 26 removed AppleHDA (AppleALC/NMHDA need it); docs/HARDWARE.md: HD 630 needs OCLP root patches on 14+"))
+        out.append(("helios-oclp-post-install", "", "after installing: AppleHDA for audio (not OCLP's Nvidia Web Drivers)",
+                    "macOS 26 removed AppleHDA (AppleALC/NMHDA need it); the HD 630 is native on 26.7.2 (Kaby Lake drivers, Metal 3)"))
     if release is not None:
         out.append(("helios-usb-map", "", "UTBDefault + SSDT-HS07-UPC (Bluetooth port internal)",
                     "the scan has no physical port map; run USBToolBox after the install for USB 3 on every port"))
