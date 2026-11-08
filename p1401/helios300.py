@@ -497,6 +497,32 @@ https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md
 """
 
 
+def _add_uefi_shell(cfg, oc, change, ock_cache=None):
+    """A 'UEFI Shell' picker entry: a terminal before macOS that can read and edit the EFI (config.plist) when a driver
+    build keeps macOS and Recovery from starting (first macOS boots, 2026-11-08). OpenShell.efi comes from the same
+    OpenCorePkg the engine built this EFI from, so it matches the OpenCore on the stick."""
+    tools = cfg.setdefault("Misc", {}).setdefault("Tools", [])
+    if any(str(t.get("Path", "")).lower() == "openshell.efi" for t in tools):
+        return
+    dst = os.path.join(oc, "Tools", "OpenShell.efi")
+    if not os.path.isfile(dst):
+        if ock_cache is None:
+            from .engine import OCK_CACHE  # noqa: PLC0415
+            ock_cache = OCK_CACHE
+        srcf = os.path.join(ock_cache, "OpenCorePkg", "EFI", "OC", "Tools", "OpenShell.efi")
+        if not os.path.isfile(srcf):
+            change("helios-uefi-shell", "", "not added: OpenShell.efi is not in the OpenCorePkg download",
+                   "the picker keeps Recovery and Reset NVRAM")
+            return
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(srcf, dst)
+    tools.append({"Arguments": "", "Auxiliary": False, "Comment": "UEFI Shell: terminal before macOS", "Enabled": True,
+                  "Flavour": "OpenShell:UEFIShell:Shell", "FullNvramAccess": False, "Name": "UEFI Shell",
+                  "Path": "OpenShell.efi", "RealPath": False, "TextMode": False})
+    change("helios-uefi-shell", "", "Misc→Tools: UEFI Shell (OpenShell.efi)",
+           "a terminal in the boot menu to edit config.plist when macOS and Recovery cannot start")
+
+
 def apply(config_path, release, macos_version, hardware, change):
     """Puts the release into the built EFI. change(rule, before, after, why) records each step. Returns a summary."""
     oc = os.path.dirname(config_path)
@@ -596,6 +622,7 @@ def apply(config_path, release, macos_version, hardware, change):
     if inp.get("KeySupport") is not True:
         change("helios-hotkeys", f"KeySupport {inp.get('KeySupport')}", "KeySupport True", "the picker hotkeys need it")
         inp["KeySupport"] = True
+    _add_uefi_shell(cfg, oc, change)
     nv_add = cfg.setdefault("NVRAM", {}).setdefault("Add", {})
     nv_del = cfg["NVRAM"].setdefault("Delete", {})
     for guid, keys in c.get("nvram_add", {}).items():

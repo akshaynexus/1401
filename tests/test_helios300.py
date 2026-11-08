@@ -527,5 +527,33 @@ class FullBuild(unittest.TestCase):
             self.assertTrue({"PG106.kext", "AirportAth10k.kext", "QCARomePatchRAM.kext"} <= kexts)
 
 
+class UefiShellTests(unittest.TestCase):
+    def test_uefi_shell_added_once_from_the_opencore_download(self):
+        from p1401 import helios300 as h
+        with tempfile.TemporaryDirectory() as d:
+            oc = os.path.join(d, "EFI", "OC"); os.makedirs(os.path.join(oc, "Tools"))
+            ock = os.path.join(d, "OCK"); src = os.path.join(ock, "OpenCorePkg", "EFI", "OC", "Tools")
+            os.makedirs(src)
+            with open(os.path.join(src, "OpenShell.efi"), "wb") as fh:
+                fh.write(b"MZshell")
+            cfg, ch = {"Misc": {"Tools": []}}, []
+            h._add_uefi_shell(cfg, oc, lambda *a: ch.append(a), ock_cache=ock)
+            h._add_uefi_shell(cfg, oc, lambda *a: ch.append(a), ock_cache=ock)
+            self.assertEqual([t["Path"] for t in cfg["Misc"]["Tools"]], ["OpenShell.efi"])
+            self.assertTrue(cfg["Misc"]["Tools"][0]["Enabled"])
+            with open(os.path.join(oc, "Tools", "OpenShell.efi"), "rb") as fh:
+                self.assertEqual(fh.read(), b"MZshell")
+            self.assertEqual(len([c for c in ch if c[0] == "helios-uefi-shell"]), 1)
+
+    def test_no_shell_entry_without_the_file(self):
+        from p1401 import helios300 as h
+        with tempfile.TemporaryDirectory() as d:
+            oc = os.path.join(d, "EFI", "OC"); os.makedirs(oc)
+            cfg, ch = {"Misc": {"Tools": []}}, []
+            h._add_uefi_shell(cfg, oc, lambda *a: ch.append(a), ock_cache=os.path.join(d, "none"))
+            self.assertEqual(cfg["Misc"]["Tools"], [])
+            self.assertIn("not added", ch[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()
