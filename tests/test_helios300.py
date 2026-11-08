@@ -68,8 +68,26 @@ WIFI = {"bus": "pci", "vendor": "168c", "device": "003e", "subsystem_vendor": "1
 BTH = {"bus": "usb", "vendor": "04ca", "device": "3016"}
 
 
-def make_release(dry_run=False, tamper=None):
-    """A manifest + its files, as a dict {file: bytes}."""
+POST_011 = [
+    {"step": "gpu", "order": 10, "what": "PG106FB and PG106Accel into /Library/Extensions",
+     "artifacts": ["install-gpu.sh", "PG106Accel.kext"], "script": "install-gpu.sh",
+     "run": {"check": "MODE=dry-run bash install-gpu.sh", "install": "MODE=install bash install-gpu.sh"}, "reboot": True},
+    {"step": "audio-voodoohda", "order": 20, "group": "audio", "choice": 1, "what": "Audio option 1: VoodooHDA, NO HDMI audio",
+     "artifacts": ["audio-voodoohda.sh"], "script": "audio-voodoohda.sh",
+     "run": {"check": "MODE=dry-run bash audio-voodoohda.sh", "install": "MODE=install bash audio-voodoohda.sh",
+             "revert": "MODE=revert bash audio-voodoohda.sh", "status": "MODE=status bash audio-voodoohda.sh"},
+     "reboot": True, "needs": ["audio option 2 not installed"]},
+    {"step": "audio-applehda", "order": 21, "group": "audio", "choice": 2, "what": "Audio option 2: AppleHDA on the root volume",
+     "artifacts": ["audio-applehda.sh"], "script": "audio-applehda.sh",
+     "run": {"check": "MODE=dry-run bash audio-applehda.sh", "install": "MODE=install bash audio-applehda.sh"},
+     "reboot": True, "needs": ["FileVault off"], "rerun_after_macos_update": True,
+     "notes": ["Revert: MODE=revert boots the last sealed snapshot"]},
+]
+
+
+def make_release(dry_run=False, tamper=None, v011=False):
+    """A manifest + its files, as a dict {file: bytes}. v011: the 0.1.1 additions (post-install scripts and their
+    machine-readable steps, Ath10kMac's baked-in country, applbkl in the manifest's DeviceProperties)."""
     arts, blobs = [], {}
     for art, data in (
             _kext("PG106.kext", "PG106", 100, hardware=[GPU]),
@@ -87,6 +105,12 @@ def make_release(dry_run=False, tamper=None):
             _file("NVIDIA-firmware-LICENCE.txt", "firmware-licence", "stick-only", b"licence")):
         arts.append(art)
         blobs[art["file"]] = data
+    if v011:
+        next(a for a in arts if a["name"] == "Ath10kMac.kext")["personality"] = {"Ath10kCountryCode": {"string": "IN"}}
+        for name in ("audio-voodoohda.sh", "audio-applehda.sh"):
+            art, data = _file(name, "script", "stick-only", b"#!/bin/bash\n# " + name.encode() + b"\n", built_by="copy")
+            arts.append(art)
+            blobs[art["file"]] = data
     if tamper:
         blobs[tamper] = blobs[tamper] + b"x"
     manifest = {
@@ -108,6 +132,9 @@ def make_release(dry_run=False, tamper=None):
                           "acpi": ["SSDT-Disable_GPU_PEG0.aml"]}},
         "post_install": [{"step": "pg106accel", "what": "PG106Accel to /Library/Extensions", "artifacts": ["PG106Accel.kext"]}],
     }
+    if v011:
+        manifest["post_install"] = copy.deepcopy(POST_011)
+        manifest["config"]["device_properties"][helios300.IGPU_PATH] = {"applbkl": {"data": "01000000"}}
     return manifest, blobs
 
 
@@ -382,6 +409,72 @@ class ApplyLimits(unittest.TestCase):
         self.assertNotIn("QCARomePatchRAM.kext", [k["BundlePath"] for k in cfg["Kernel"]["Add"]])
 
 
+class Release011(unittest.TestCase):
+    """0.1.1 manifests: post-install scripts with machine-readable steps, the Wi-Fi country in Ath10kMac,
+    applbkl from the manifest."""
+
+    def setUp(self):
+        self.cfg, self.changes, self.root = run_apply(release_dir(v011=True))
+        self.rules = [c["rule"] for c in self.changes]
+        self.kit = os.path.join(self.root, "EFI", "Helios300")
+        with open(os.path.join(self.kit, "README.txt"), encoding="utf-8") as fh:
+            self.readme = fh.read()
+
+    def test_scripts_go_on_the_stick(self):
+        self.assertEqual(sorted(os.listdir(self.kit)), ["NVIDIA-firmware-LICENCE.txt", "PG106Accel.kext.zip", "README.txt",
+                                                        "audio-applehda.sh", "audio-voodoohda.sh", "manifest.json"])
+
+    def test_readme_lists_the_steps_with_their_commands(self):
+        self.assertIn("AUDIO: do ONE of these 2 options.", self.readme)
+        self.assertLess(self.readme.index("[gpu]"), self.readme.index("[audio-voodoohda] option 1"))
+        self.assertLess(self.readme.index("[audio-voodoohda] option 1"), self.readme.index("[audio-applehda] option 2"))
+        for cmd in ("MODE=dry-run bash audio-voodoohda.sh", "MODE=install bash audio-voodoohda.sh",
+                    "MODE=revert bash audio-voodoohda.sh", "MODE=install bash audio-applehda.sh"):
+            self.assertIn(cmd, self.readme)
+        self.assertIn("needs:   FileVault off", self.readme)
+        self.assertIn("run it again after every macOS update", self.readme)
+        self.assertIn("- Revert: MODE=revert boots the last sealed snapshot", self.readme)
+
+    def test_a_step_whose_script_is_not_released_is_done_by_hand(self):
+        gpu = self.readme[self.readme.index("[gpu]"):self.readme.index("[audio-voodoohda]")]
+        self.assertIn("install-gpu.sh is not in this release: do it by hand", gpu)
+        self.assertNotIn("MODE=install bash install-gpu.sh", gpu)
+
+    def test_readme_describes_both_audio_options(self):
+        self.assertIn("NO HDMI audio", self.readme)
+        self.assertIn("FileVault must be OFF", self.readme)
+        self.assertIn("run it again after every update", self.readme)
+
+    def test_wifi_country_from_the_kext_is_reported(self):
+        rule = next(c for c in self.changes if c["rule"] == "helios-wifi-country")
+        self.assertIn("IN", rule["after"])
+        self.assertNotIn("ath10k_cc", self.cfg["NVRAM"]["Add"][BOOT].get("boot-args", ""))
+
+    def test_applbkl_from_the_manifest_once(self):
+        self.assertEqual(self.cfg["DeviceProperties"]["Add"][helios300.IGPU_PATH]["applbkl"], helios300.APPLBKL_ON)
+        self.assertEqual(self.rules.count("helios-backlight"), 1)
+
+    def test_manifest_igpu_properties_need_the_hd_630(self):
+        hw = copy.deepcopy(report())
+        hw["GPU"] = {k: v for k, v in hw["GPU"].items() if v.get("Device ID") != "8086-591B"}
+        cfg, changes, _ = run_apply(release_dir(v011=True), hardware=hw)
+        self.assertNotIn(helios300.IGPU_PATH, cfg["DeviceProperties"]["Add"])
+        self.assertNotIn("helios-backlight", {c["rule"] for c in changes})
+
+    def test_no_country_rule_without_wifi_or_for_an_old_manifest(self):
+        r = report()
+        r["Network"] = {n: p for n, p in r["Network"].items() if p["Device ID"] != "168C-003E"}
+        _, changes, _ = run_apply(release_dir(v011=True), hardware=r)
+        self.assertNotIn("helios-wifi-country", {c["rule"] for c in changes})
+        _, changes, _ = run_apply(release_dir())
+        self.assertNotIn("helios-wifi-country", {c["rule"] for c in changes})
+
+    def test_old_manifest_steps_still_listed(self):
+        _, _, root = run_apply(release_dir())
+        with open(os.path.join(root, "EFI", "Helios300", "README.txt"), encoding="utf-8") as fh:
+            self.assertIn("[pg106accel] PG106Accel to /Library/Extensions\n    files: PG106Accel.kext", fh.read())
+
+
 class KeepDevices(unittest.TestCase):
     def disabled(self):
         return {"GPU: NVIDIA Corporation GP106M [GeForce GTX 1060 Mobile]": {"Device ID": "10DE-1C20"},
@@ -416,6 +509,11 @@ class Notes(unittest.TestCase):
         self.assertIn("helios-release-pending", rules)
         self.assertIn("helios-oclp-post-install", rules)
         self.assertNotIn("helios-cpufriend", rules)
+
+    def test_audio_options_are_named(self):
+        after = next(r[2] for r in helios300.notes(self.res(), None, "x", []) if r[0] == "helios-oclp-post-install")
+        for word in ("VoodooHDA", "no HDMI audio", "AppleHDA", "FileVault off", "after every macOS update", "Web Drivers"):
+            self.assertIn(word, after)
 
     def test_spoofed_smbios_asks_for_cpufriend(self):
         rules = {r[0] for r in helios300.notes(self.res(smbios="MacBookPro16,1"), None, "x", [])}
@@ -511,6 +609,33 @@ class BuildFromSource(unittest.TestCase):
         _, calls, _ = self.run_mode("v0.1.0", env={"HELIOS_IAF2": "/x/IOAcceleratorFamily2"})
         cmd = next(c[0] for c in calls if c[0][0] == "bash")
         self.assertEqual(cmd[-2:], ["--iaf2", "/x/IOAcceleratorFamily2"])
+
+    def run_env(self, env):
+        seen = []
+
+        def run(cmd, cwd=None, **kw):
+            if cmd[0] == "git":
+                if cmd[1] == "clone":
+                    os.makedirs(os.path.join(cmd[-1], ".git"))
+                return mock.Mock(returncode=0, stdout="0" * 40 if cmd[1] == "rev-parse" else "", stderr="")
+            seen.append(kw.get("env") or {})
+            dist = cmd[cmd.index("--dist") + 1]
+            os.makedirs(dist, exist_ok=True)
+            with open(os.path.join(dist, "manifest.json"), "w") as fh:
+                fh.write("{}")
+            return mock.Mock(returncode=0)
+        with mock.patch("builtins.print"):
+            helios300.build_from_source("v0.1.1", tempfile.mkdtemp(), run=run, env=env)
+        return seen[0]
+
+    def test_without_kernel_collections_the_audit_is_skipped(self):
+        # release.sh refuses a real release without the target Mac's KCs; a local source build goes on, recorded.
+        self.assertEqual(self.run_env({}).get("HELIOS_KC_AUDIT"), "skip")
+
+    def test_kernel_collections_are_used_when_named(self):
+        env = self.run_env({"HELIOS_KC_DIR": "/kc", "HELIOS_WIFI_COUNTRY": "DE"})
+        self.assertNotIn("HELIOS_KC_AUDIT", env)
+        self.assertEqual((env["HELIOS_KC_DIR"], env["HELIOS_WIFI_COUNTRY"]), ("/kc", "DE"))
 
     def test_missing_toolchain_says_where_to_get_it(self):
         with self.assertRaises(helios300.ReleaseError) as e:

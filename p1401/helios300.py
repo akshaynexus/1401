@@ -21,8 +21,11 @@ The pass, from engine.build:
    "Device ID", and the engine only reads "Device"): VoodooPS2Controller, VoodooI2C + VoodooI2CHID (SYNA7DB5),
    RealtekCardReader + RealtekCardReaderFriend for the RTL8411B, BlueToolFixup for QCARomePatchRAM.
 5. apply(): after the engine wrote the EFI and before 1401's policy pass: the release's kexts, SSDTs, DeviceProperties,
-   NVRAM and the forbidden list; the post-install pieces go to EFI/Helios300 with a README. Every change is a rule in
-   the build result.
+   NVRAM and the forbidden list; the post-install pieces (PG106FB, PG106Accel, the Metal plugin, the post-install
+   scripts) go to EFI/Helios300 with a README that lists the manifest's post_install steps and their exact commands
+   (the GPU step, then ONE audio option). Every change is a rule in the build result. The Wi-Fi country is not a
+   boot-arg: boot-args stay out of NVRAM > Delete (policy 2c), so the release bakes it into Ath10kMac
+   (Ath10kCountryCode) and apply() reports it.
 
 None of nullmoth.py's rules fire here: the GTX 1060 is not in the NullMoth driver's (Turing-or-newer) table, so no
 NVRM/NVRMFB/NVAccel/NVRMAGDC, no nvfb/nvaccel boot-args, no NullMoth package on the stick, and no -wegnoegpu.
@@ -338,6 +341,14 @@ def build_from_source(ref, work_dir, run=None, env=None):
     cmd = ["bash", os.path.join(src, "tools", "release.sh"), "--version", version, "--dist", dist]
     if env.get("HELIOS_IAF2"):
         cmd += ["--iaf2", env["HELIOS_IAF2"]]
+    # release.sh audits every kext against the target Mac's real kernel collections when HELIOS_KC_DIR names them
+    # (it reads the variable itself) and refuses a real release without them; a local source build without the
+    # collections goes on with the audit recorded as skipped in its manifest. HELIOS_WIFI_COUNTRY (default IN) is
+    # read by release.sh too. Environment, not arguments: an older release.sh ignores both.
+    if not env.get("HELIOS_KC_DIR"):
+        env["HELIOS_KC_AUDIT"] = "skip"
+        print("macos_helios300: HELIOS_KC_DIR is not set, so this source build is not audited against your Mac's "
+              "kernel collections (its manifest says kc_audit skipped)", flush=True)
     print(f"macos_helios300 {ref} ({commit[:12]}): running its tools/release.sh (this takes a while; log: {log})", flush=True)
     with open(log, "w", encoding="utf-8") as fh:
         r = run(cmd, cwd=src, stdout=fh, stderr=subprocess.STDOUT, env=env)
@@ -489,19 +500,66 @@ POST_README = """macos_helios300 {version} post-install kit for the {name}
 
 These were built by macos_helios300 tools/release.sh and checked by 1401 against the release manifest
 (SHA-256 of every file). OpenCore cannot inject them; install them after macOS 26 is running.
+Mount the stick's EFI partition (sudo diskutil mount <disk>s1) or copy this folder to your home folder, open
+Terminal in it and run the scripts with bash as your own user: they ask for sudo themselves. MODE=dry-run
+changes nothing and prints what MODE=install would do. Restart after every install or revert.
 
 {steps}
 
 After installing macOS 26 (also listed in 1401's build result):
 - The HD 630 needs no patch: macOS 26.7.2 still ships the Kaby Lake drivers (Metal 3 on the first boot).
-- Audio: macOS 26 removed AppleHDA (AppleALC and NMHDA need it). Do NOT let OpenCore Legacy Patcher apply its
-  "Nvidia Web Drivers" set: they would take the GTX 1060 from PG106. OCLP refuses to patch while it lists them;
-  macos_helios300 docs/HARDWARE.md has the audio-only route. SIP is already lowered.
+- Audio: macOS 26 removed AppleHDA. Pick ONE of the two options above:
+  option 1, VoodooHDA (audio-voodoohda.sh): a kext in /Library/Extensions, nothing on the system volume,
+    reversible, survives macOS updates; speakers, headphones and microphones, but NO HDMI audio.
+  option 2, AppleHDA (audio-applehda.sh): AppleHDA back on the system volume, as OpenCore Legacy Patcher's
+    "Modern Audio" does; with AppleALC and NMHDA it gives HDMI audio too. FileVault must be OFF. A macOS update
+    removes it: run it again after every update.
+  Do NOT let OpenCore Legacy Patcher apply its own patch set: it also lists "Nvidia Web Drivers", which would take
+  the GTX 1060 from PG106. SIP is already lowered.
 - USB: SSDT-HS07-UPC marks the Bluetooth port internal; map the other ports with USBToolBox for USB 3 speeds.
+- If a driver build keeps macOS from starting: Shift+Enter in the OpenCore picker starts safe mode, where the
+  macos_helios300 kexts stand down; then revert the last step (MODE=revert).
 
 Sources, licences and status of every file: manifest.json next to this README, and
 https://github.com/akshaynexus/macos_helios300/blob/main/docs/MANIFEST.md
 """
+
+
+def _post_steps(manifest, shipped):
+    """The manifest's post_install steps as README text: in order, alternatives of a group named once, each step's
+    exact commands when its script is in the kit (else what to do by hand)."""
+    steps = sorted(manifest.get("post_install") or [], key=lambda st: st.get("order", 0))
+    out, said = [], set()
+    for st in steps:
+        g = st.get("group")
+        if g and g not in said:
+            n = sum(1 for x in steps if x.get("group") == g)
+            out.append(f"{g.upper()}: do ONE of these {n} options.")
+            said.add(g)
+        head = f"[{st['step']}]" + (f" option {st['choice']}" if st.get("choice") else "")
+        out.append(f"{head} {st['what']}")
+        script, run = st.get("script"), st.get("run") or {}
+        if script and script in shipped:
+            if st.get("cwd"):
+                out.append(f"    run in:  {st['cwd']}")
+            for k in ("check", "install", "revert", "status"):
+                if run.get(k):
+                    out.append(f"    {k + ':':<8} {run[k]}")
+        elif script:
+            out.append(f"    {script} is not in this release: do it by hand as described ({', '.join(st['artifacts'])})")
+        else:
+            out.append(f"    files: {', '.join(st['artifacts'])}")
+        if st.get("needs"):
+            out.append("    needs:   " + "; ".join(st["needs"]))
+        if st.get("reboot"):
+            out.append("    restart after install or revert")
+        if st.get("rerun_after_macos_update"):
+            out.append("    run it again after every macOS update")
+        for note in st.get("notes") or []:
+            out.append(f"    - {note}")
+        out.append("")
+    return "\n".join(out).rstrip()
+
 
 
 def _add_uefi_shell(cfg, oc, change, ock_cache=None):
@@ -607,17 +665,31 @@ def apply(config_path, release, macos_version, hardware, change):
     if skipped:
         change("helios-skipped", "", "; ".join(skipped), "an artifact is added only for hardware the scan shows and with what it needs")
 
+    wifi = next((a for a in m["artifacts"] if a["name"] == "Ath10kMac.kext"), None)
+    cc = ((wifi or {}).get("personality") or {}).get("Ath10kCountryCode")
+    if wifi and wifi["name"] in added and cc:
+        change("helios-wifi-country", "", f"Ath10kMac country {_plist_value(cc)} (Ath10kCountryCode, in the release's kext)",
+               "the release bakes the regulatory country into the kext OpenCore injects; a boot-arg would not reach an "
+               "installed Mac (boot-args stay out of NVRAM > Delete). ath10k_cc=XX in NVRAM boot-args still overrides it")
+
     c = m["config"]
     dp = cfg.setdefault("DeviceProperties", {}).setdefault("Add", {})
     for path, props in c.get("device_properties", {}).items():
+        if path == IGPU_PATH and "8086:591b" not in present["pci"]:
+            continue   # the HD 630's properties only when the scan shows it
         d = dp.setdefault(path, {})
         for k, v in props.items():
             val = _plist_value(v)
             if d.get(k) != val:
-                change("helios-device-properties", f"{path} {k}={d.get(k)!r}", f"{k}={val!r}",
-                       "the GP106 and its HDMI audio share hda-gfx onboard-2 (WhateverGreen gives the HD 630 onboard-1)")
+                if k == "applbkl":
+                    change("helios-backlight", f"{path} applbkl={d.get(k)!r}", f"applbkl={val!r}",
+                           "brightness slider: WhateverGreen skips its AppleBacklight panel patch when a discrete GPU is "
+                           "visible, and the GTX 1060 stays on for PG106; applbkl=1 forces it (release manifest)")
+                else:
+                    change("helios-device-properties", f"{path} {k}={d.get(k)!r}", f"{k}={val!r}",
+                           "the GP106 and its HDMI audio share hda-gfx onboard-2 (WhateverGreen gives the HD 630 onboard-1)")
                 d[k] = val
-    if "8086:591b" in present["pci"]:
+    if "8086:591b" in present["pci"]:   # also for a release whose manifest predates applbkl (v0.1.0)
         igpu = dp.setdefault(IGPU_PATH, {})
         if igpu.get("applbkl") != APPLBKL_ON:
             change("helios-backlight", f"{IGPU_PATH} applbkl={igpu.get('applbkl')!r}", f"applbkl={APPLBKL_ON!r}",
@@ -683,7 +755,7 @@ def apply(config_path, release, macos_version, hardware, change):
     # Post-install pieces (OpenCore cannot inject them) + licences, on the stick under EFI/Helios300.
     kit = os.path.join(efi, "Helios300")
     shutil.rmtree(kit, ignore_errors=True)
-    post = []
+    post, shipped = [], set()
     for a in m["artifacts"]:
         if a.get("install") == "opencore" or not fits(a):
             continue
@@ -691,14 +763,15 @@ def apply(config_path, release, macos_version, hardware, change):
         with open(os.path.join(kit, a["file"]), "wb") as fh:
             fh.write(release.blob(a))
         post.append(a["file"])
+        shipped.add(a["name"])
     if post:
         with open(os.path.join(kit, "manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(m, fh, indent=1)
-        steps = "\n".join(f"- {s['what']} ({', '.join(s['artifacts'])})" for s in m.get("post_install") or [])
         with open(os.path.join(kit, "README.txt"), "w", encoding="utf-8") as fh:
-            fh.write(POST_README.format(version=release.version, name=NAME, steps=steps))
+            fh.write(POST_README.format(version=release.version, name=NAME, steps=_post_steps(m, shipped)))
         change("helios-post-install", "", "EFI/Helios300: " + ", ".join(post),
-               "PG106Accel, the Metal plugin and NVK load from macOS itself; they go on the stick for after the install")
+               "PG106FB, PG106Accel, the Metal plugin, NVK and the audio scripts are installed from macOS itself; "
+               "they go on the stick with a README of the steps")
 
     tmp = config_path + ".tmp"
     with open(tmp, "wb") as fh:
@@ -720,8 +793,12 @@ def notes(res, release, why_not, kept):
         out.append(("helios-cpufriend", "", f"SMBIOS {res.smbios}: add CPUFriend + CPUFriendDataProvider made from {SMBIOS_NATIVE}",
                     "the i7-7700HQ's power data is MacBookPro14,3's; another model's data runs it at the wrong frequencies"))
     if _darwin(res.macos_version) >= (25, 0, 0):
-        out.append(("helios-oclp-post-install", "", "after installing: AppleHDA for audio (not OCLP's Nvidia Web Drivers)",
-                    "macOS 26 removed AppleHDA (AppleALC/NMHDA need it); the HD 630 is native on 26.7.2 (Kaby Lake drivers, Metal 3)"))
+        out.append(("helios-oclp-post-install", "",
+                    "after installing, audio from EFI/Helios300: option 1 VoodooHDA (audio-voodoohda.sh, no HDMI audio) "
+                    "or option 2 AppleHDA (audio-applehda.sh: FileVault off, run again after every macOS update); "
+                    "never OCLP's Nvidia Web Drivers",
+                    "macOS 26 removed AppleHDA (AppleALC/NMHDA need it) and OCLP's own patch set would replace PG106 with "
+                    "the Web Drivers; the HD 630 is native on 26.7.2 (Kaby Lake drivers, Metal 3)"))
     if release is not None:
         out.append(("helios-usb-map", "", "UTBDefault + SSDT-HS07-UPC (Bluetooth port internal)",
                     "the scan has no physical port map; run USBToolBox after the install for USB 3 on every port"))
