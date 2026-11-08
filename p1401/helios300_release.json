@@ -1,6 +1,6 @@
 {
   "about": "The macos_helios300 release 1401 uses for the Acer Predator Helios 300 G3-571 (p1401/helios300.py). tag + the SHA-256 of that release's manifest.json; every artifact is then checked against the manifest. null while nothing is pinned: the latest macos_helios300 release (pre-releases included) is used, its manifest unpinned; with none published the Helios builds with the laptop basics only and says so. Local release: --release-dir / --manifest (or A1401_HELIOS_MANIFEST).",
   "repo": "akshaynexus/macos_helios300",
-  "tag": "v0.1.0",
-  "manifest_sha256": "ca61569a499d52ddf69b1ba5f567a9a30610ab384ec43271d1b31780a2ea8fad"
+  "tag": "v0.1.1",
+  "manifest_sha256": "d131fab91245caf8ef9228b9c12fdf0a4fd714b0ab524d5278956d3d837a850f"
 }
