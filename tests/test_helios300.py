@@ -320,6 +320,23 @@ class Apply(unittest.TestCase):
         self.assertEqual(nv["bluetoothInternalControllerInfo"], bytes(14))
         self.assertIn("bluetoothInternalControllerInfo", self.cfg["NVRAM"]["Delete"][BOOT])
 
+    def test_brightness_whatevergreen_backlight_patch_forced_on(self):
+        # The GTX 1060 stays visible for PG106, so WhateverGreen's applbkl default (detect: IGPU-only setups) would skip
+        # AppleBacklight and the CMN panel would get no 'brightness' parameter (no slider on macOS 26.7.2).
+        igpu = self.cfg["DeviceProperties"]["Add"][helios300.IGPU_PATH]
+        self.assertEqual(igpu["applbkl"], b"\x01\x00\x00\x00")
+        self.assertIn("helios-backlight", self.rules)
+
+    def test_backlight_rule_is_idempotent(self):
+        cfg = engine_config()
+        cfg["DeviceProperties"]["Add"][helios300.IGPU_PATH] = {"AAPL,ig-platform-id": bytes.fromhex("00001b59"),
+                                                              "applbkl": helios300.APPLBKL_ON}
+        cfg2, changes, _ = run_apply(release_dir(), cfg=cfg)
+        igpu = cfg2["DeviceProperties"]["Add"][helios300.IGPU_PATH]
+        self.assertEqual(igpu["AAPL,ig-platform-id"], bytes.fromhex("00001b59"))
+        self.assertEqual(igpu["applbkl"], helios300.APPLBKL_ON)
+        self.assertNotIn("helios-backlight", {c["rule"] for c in changes})
+
     def test_ssdts_in_order(self):
         paths = [x["Path"] for x in self.cfg["ACPI"]["Add"]]
         self.assertEqual(paths[-2:], ["SSDT-PG106-HDAU.aml", "SSDT-HS07-UPC.aml"])
@@ -340,6 +357,7 @@ class ApplyLimits(unittest.TestCase):
         cfg, changes, _ = run_apply(release_dir(), macos="24.6.0")
         self.assertNotIn("PG106.kext", [k["BundlePath"] for k in cfg["Kernel"]["Add"]])
         self.assertIn("helios-macos-range", {c["rule"] for c in changes})
+        self.assertNotIn("helios-backlight", {c["rule"] for c in changes})   # the engine hides the dGPU there
 
     def test_a_replaced_wifi_card_gets_no_wifi_kexts(self):
         r = report()
@@ -349,6 +367,13 @@ class ApplyLimits(unittest.TestCase):
         self.assertNotIn("Ath10kMac.kext", kexts)
         self.assertNotIn("AirportAth10k.kext", kexts)
         self.assertIn("helios-skipped", {c["rule"] for c in changes})
+
+    def test_no_backlight_property_without_the_hd_630(self):
+        hw = copy.deepcopy(report())
+        hw["GPU"] = {k: v for k, v in hw["GPU"].items() if v.get("Device ID") != "8086-591B"}
+        cfg, changes, _ = run_apply(release_dir(), hardware=hw)
+        self.assertNotIn(helios300.IGPU_PATH, cfg["DeviceProperties"]["Add"])
+        self.assertNotIn("helios-backlight", {c["rule"] for c in changes})
 
     def test_missing_dependency_skips_the_kext(self):
         cfg = engine_config()
@@ -523,8 +548,16 @@ class FullBuild(unittest.TestCase):
         self.assertTrue({"AppleALC.kext", "VoodooPS2Controller.kext", "VoodooI2C.kext", "RealtekCardReader.kext"} <= kexts)
         layout = cfg["DeviceProperties"]["Add"].get("PciRoot(0x0)/Pci(0x1f,0x3)", {}).get("layout-id")
         self.assertIn(layout, (29, (29).to_bytes(4, "little")))   # the engine writes it as an integer
+        # Brightness: PNLF under GFX0 with _UID 16 (Skylake/Kaby Lake profile F16Txxxx, PWM max 0x56C) and -igfxblt (the
+        # backlight-registers fix for Kaby Lake on macOS 13.4+).
+        with open(os.path.join(out, "EFI", "OC", "ACPI", "SSDT-PNLF.aml"), "rb") as fh:
+            pnlf = fh.read()
+        self.assertIn(b"_SB_PCI0GFX0PNLF", pnlf)
+        self.assertIn(b"_UID\x0a\x10", pnlf)
+        self.assertIn("-igfxblt", cfg["NVRAM"]["Add"][BOOT].get("boot-args", "").split())
         if os.environ.get(helios300.ENV_MANIFEST):
             self.assertTrue({"PG106.kext", "AirportAth10k.kext", "QCARomePatchRAM.kext"} <= kexts)
+            self.assertEqual(cfg["DeviceProperties"]["Add"][helios300.IGPU_PATH]["applbkl"], helios300.APPLBKL_ON)
 
 
 class UefiShellTests(unittest.TestCase):

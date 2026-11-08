@@ -60,6 +60,13 @@ LAYOUT_ID = "29"
 # and Bluetooth/Wi-Fi drivers for other chips the engine may pick.
 NEVER = ("NVRM.kext", "NVRMFB.kext", "NVAccel.kext", "NVRMAGDC.kext")
 SMBIOS_NATIVE = "MacBookPro14,3"          # 15-inch 2017: i7-7700HQ + HD 630, the same CPU/iGPU; no CPUFriend data needed
+IGPU_PATH = "PciRoot(0x0)/Pci(0x2,0x0)"
+# WhateverGreen applbkl=1 (APPLBKL_ON). Its default, APPLBKL_DETECT, patches AppleBacklight only when no external GPU is
+# visible (kern_weg.cpp: "IGPU-only non-Apple setups"); here the GTX 1060 stays on for PG106, so WhateverGreen leaves
+# AppleBacklight alone: AppleIntelPanelA finds no F16T<panel> profile for the CMN N156HCE-EAA, AppleBacklightDisplay
+# gets bklt but no 'brightness' parameter, and macOS shows no brightness slider (first macOS 26.7.2 boots, 2026-11-08).
+# Forced on, WhateverGreen adds its F16Txxxx profile (SSDT-PNLF _UID 16, Kaby Lake PWM max 0x56C = the panel's bklt max).
+APPLBKL_ON = (1).to_bytes(4, "little")
 
 
 class ReleaseError(RuntimeError):
@@ -610,6 +617,13 @@ def apply(config_path, release, macos_version, hardware, change):
                 change("helios-device-properties", f"{path} {k}={d.get(k)!r}", f"{k}={val!r}",
                        "the GP106 and its HDMI audio share hda-gfx onboard-2 (WhateverGreen gives the HD 630 onboard-1)")
                 d[k] = val
+    if "8086:591b" in present["pci"]:
+        igpu = dp.setdefault(IGPU_PATH, {})
+        if igpu.get("applbkl") != APPLBKL_ON:
+            change("helios-backlight", f"{IGPU_PATH} applbkl={igpu.get('applbkl')!r}", f"applbkl={APPLBKL_ON!r}",
+                   "brightness slider: WhateverGreen skips its AppleBacklight panel patch when a discrete GPU is "
+                   "visible, and the GTX 1060 stays on for PG106; applbkl=1 forces it")
+            igpu["applbkl"] = APPLBKL_ON
     # Boot hotkeys in the OpenCore picker: Shift+Enter starts macOS safe mode (-x), Cmd+V verbose. The Helios kexts
     # (PG106, PG106FB, Ath10kMac, AirportAth10k, QCARomePatchRAM) stand down under -x, so a bad driver build can be
     # bypassed from the picker without Recovery or the USB stick (first macOS boots, 2026-11-08).
