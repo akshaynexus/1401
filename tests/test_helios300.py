@@ -72,16 +72,17 @@ POST_011 = [
     {"step": "gpu", "order": 10, "what": "PG106FB and PG106Accel into /Library/Extensions",
      "artifacts": ["install-gpu.sh", "PG106Accel.kext"], "script": "install-gpu.sh",
      "run": {"check": "MODE=dry-run bash install-gpu.sh", "install": "MODE=install bash install-gpu.sh"}, "reboot": True},
-    {"step": "audio-voodoohda", "order": 20, "group": "audio", "choice": 1, "what": "Audio option 1: VoodooHDA, NO HDMI audio",
-     "artifacts": ["audio-voodoohda.sh"], "script": "audio-voodoohda.sh",
-     "run": {"check": "MODE=dry-run bash audio-voodoohda.sh", "install": "MODE=install bash audio-voodoohda.sh",
-             "revert": "MODE=revert bash audio-voodoohda.sh", "status": "MODE=status bash audio-voodoohda.sh"},
-     "reboot": True, "needs": ["audio option 2 not installed"]},
-    {"step": "audio-applehda", "order": 21, "group": "audio", "choice": 2, "what": "Audio option 2: AppleHDA on the root volume",
+    {"step": "audio-applehda", "order": 20, "group": "audio", "choice": 2, "recommended": True,
+     "what": "Audio option 2 (recommended): AppleHDA on the root volume",
      "artifacts": ["audio-applehda.sh"], "script": "audio-applehda.sh",
      "run": {"check": "MODE=dry-run bash audio-applehda.sh", "install": "MODE=install bash audio-applehda.sh"},
      "reboot": True, "needs": ["FileVault off"], "rerun_after_macos_update": True,
      "notes": ["Revert: MODE=revert boots the last sealed snapshot"]},
+    {"step": "audio-voodoohda", "order": 21, "group": "audio", "choice": 1, "what": "Audio option 1 (fallback): VoodooHDA, NO HDMI audio",
+     "artifacts": ["audio-voodoohda.sh"], "script": "audio-voodoohda.sh",
+     "run": {"check": "MODE=dry-run bash audio-voodoohda.sh", "install": "MODE=install bash audio-voodoohda.sh",
+             "revert": "MODE=revert bash audio-voodoohda.sh", "status": "MODE=status bash audio-voodoohda.sh"},
+     "reboot": True, "needs": ["audio option 2 not installed"]},
 ]
 
 
@@ -426,8 +427,10 @@ class Release011(unittest.TestCase):
 
     def test_readme_lists_the_steps_with_their_commands(self):
         self.assertIn("AUDIO: do ONE of these 2 options.", self.readme)
-        self.assertLess(self.readme.index("[gpu]"), self.readme.index("[audio-voodoohda] option 1"))
-        self.assertLess(self.readme.index("[audio-voodoohda] option 1"), self.readme.index("[audio-applehda] option 2"))
+        # the manifest's order: the recommended option 2 first, the fallback option 1 after it
+        self.assertLess(self.readme.index("[gpu]"), self.readme.index("[audio-applehda] option 2 (recommended)"))
+        self.assertLess(self.readme.index("[audio-applehda] option 2 (recommended)"), self.readme.index("[audio-voodoohda] option 1"))
+        self.assertNotIn("[audio-voodoohda] option 1 (recommended)", self.readme)
         for cmd in ("MODE=dry-run bash audio-voodoohda.sh", "MODE=install bash audio-voodoohda.sh",
                     "MODE=revert bash audio-voodoohda.sh", "MODE=install bash audio-applehda.sh"):
             self.assertIn(cmd, self.readme)
@@ -436,7 +439,7 @@ class Release011(unittest.TestCase):
         self.assertIn("- Revert: MODE=revert boots the last sealed snapshot", self.readme)
 
     def test_a_step_whose_script_is_not_released_is_done_by_hand(self):
-        gpu = self.readme[self.readme.index("[gpu]"):self.readme.index("[audio-voodoohda]")]
+        gpu = self.readme[self.readme.index("[gpu]"):self.readme.index("[audio-applehda]")]
         self.assertIn("install-gpu.sh is not in this release: do it by hand", gpu)
         self.assertNotIn("MODE=install bash install-gpu.sh", gpu)
 
@@ -512,7 +515,8 @@ class Notes(unittest.TestCase):
 
     def test_audio_options_are_named(self):
         after = next(r[2] for r in helios300.notes(self.res(), None, "x", []) if r[0] == "helios-oclp-post-install")
-        for word in ("VoodooHDA", "no HDMI audio", "AppleHDA", "FileVault off", "after every macOS update", "Web Drivers"):
+        for word in ("VoodooHDA", "no HDMI audio", "AppleHDA", "recommended", "fallback", "FileVault off",
+                     "after every macOS update", "Web Drivers"):
             self.assertIn(word, after)
 
     def test_spoofed_smbios_asks_for_cpufriend(self):

@@ -57,7 +57,11 @@ BT = "04CA-3016"                          # QCA Rome Bluetooth (Lite-On)
 CODEC = ("10EC-0255", "1025118A")         # Realtek ALC255 (codec subsystem: vendor then device)
 HDMI_CODEC = "10DE-0084"                  # the GP106's HDMI codec (Sound section)
 # AppleALC Resources/ALC255 layout 29: "dhinakg - Realtek ALC255 for Acer Predator G3-571" (OpCore-Simplify's
-# codec_layouts.py lists it with that comment). The exact laptop, so no other layout is guessed.
+# codec_layouts.py lists it with that comment). The exact laptop, so no other layout is guessed. Checked against
+# AppleALC master (1.9.9) on 2026-11-08: unchanged since PR #531 (layout 27 + Owod's mic fix); speakers 0x14,
+# headphone 0x21 (auto-switch), internal DMIC 0x12, jack input 0x19, and Apple's speaker EQ/limiter in layout29.xml.
+# None of AppleALC's other Acer ALC255 entries is a Predator G3. The headset mic on the combo jack is unverified
+# (macos_helios300 docs/HARDWARE.md "Headset microphone").
 LAYOUT_ID = "29"
 # Kexts the release replaces or must never meet (also in the manifest's forbidden list): the NullMoth Turing+ stack,
 # and Bluetooth/Wi-Fi drivers for other chips the engine may pick.
@@ -509,11 +513,12 @@ changes nothing and prints what MODE=install would do. Restart after every insta
 After installing macOS 26 (also listed in 1401's build result):
 - The HD 630 needs no patch: macOS 26.7.2 still ships the Kaby Lake drivers (Metal 3 on the first boot).
 - Audio: macOS 26 removed AppleHDA. Pick ONE of the two options above:
-  option 1, VoodooHDA (audio-voodoohda.sh): a kext in /Library/Extensions, nothing on the system volume,
-    reversible, survives macOS updates; speakers, headphones and microphones, but NO HDMI audio.
-  option 2, AppleHDA (audio-applehda.sh): AppleHDA back on the system volume, as OpenCore Legacy Patcher's
-    "Modern Audio" does; with AppleALC and NMHDA it gives HDMI audio too. FileVault must be OFF. A macOS update
-    removes it: run it again after every update.
+  option 2 (recommended), AppleHDA (audio-applehda.sh): AppleHDA back on the system volume, as OpenCore Legacy
+    Patcher's "Modern Audio" does; AppleALC layout 29 with Apple's speaker EQ, and with NMHDA HDMI audio too.
+    It removes option 1 first. FileVault must be OFF. A macOS update removes it: run it again after every update.
+  option 1 (fallback), VoodooHDA (audio-voodoohda.sh): a kext in /Library/Extensions, nothing on the system volume,
+    reversible, survives macOS updates; speakers, headphones and microphones, but it sounds worse and has NO HDMI
+    audio.
   Do NOT let OpenCore Legacy Patcher apply its own patch set: it also lists "Nvidia Web Drivers", which would take
   the GTX 1060 from PG106. SIP is already lowered.
 - USB: SSDT-HS07-UPC marks the Bluetooth port internal; map the other ports with USBToolBox for USB 3 speeds.
@@ -536,7 +541,8 @@ def _post_steps(manifest, shipped):
             n = sum(1 for x in steps if x.get("group") == g)
             out.append(f"{g.upper()}: do ONE of these {n} options.")
             said.add(g)
-        head = f"[{st['step']}]" + (f" option {st['choice']}" if st.get("choice") else "")
+        head = f"[{st['step']}]" + (f" option {st['choice']}" if st.get("choice") else "") + \
+            (" (recommended)" if st.get("recommended") else "")
         out.append(f"{head} {st['what']}")
         script, run = st.get("script"), st.get("run") or {}
         if script and script in shipped:
@@ -794,9 +800,9 @@ def notes(res, release, why_not, kept):
                     "the i7-7700HQ's power data is MacBookPro14,3's; another model's data runs it at the wrong frequencies"))
     if _darwin(res.macos_version) >= (25, 0, 0):
         out.append(("helios-oclp-post-install", "",
-                    "after installing, audio from EFI/Helios300: option 1 VoodooHDA (audio-voodoohda.sh, no HDMI audio) "
-                    "or option 2 AppleHDA (audio-applehda.sh: FileVault off, run again after every macOS update); "
-                    "never OCLP's Nvidia Web Drivers",
+                    "after installing, audio from EFI/Helios300: option 2 AppleHDA, recommended (audio-applehda.sh: "
+                    "layout 29 + HDMI audio; FileVault off, run again after every macOS update), or option 1 VoodooHDA "
+                    "as the fallback (audio-voodoohda.sh, no HDMI audio); never OCLP's Nvidia Web Drivers",
                     "macOS 26 removed AppleHDA (AppleALC/NMHDA need it) and OCLP's own patch set would replace PG106 with "
                     "the Web Drivers; the HD 630 is native on 26.7.2 (Kaby Lake drivers, Metal 3)"))
     if release is not None:
